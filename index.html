@@ -363,9 +363,6 @@
             font-size: 0.65rem;
             font-weight: 600;
             margin-right: 8px;
-            background: rgba(139, 92, 246, 0.15);
-            color: #a78bfa;
-            border: 1px solid rgba(139, 92, 246, 0.2);
         }
         .transcript-entry .text { color: var(--text); }
         .transcript-entry .duration {
@@ -443,8 +440,9 @@
         <div class="card" id="recordingCard">
             <div class="card-header">
                 <span class="card-title">
-                    <span class="status-pill idle" id="vadStatus"><span class="status-dot gray"></span> 语音检测模型: 加载中</span>
-                    <span class="status-pill idle" id="asrStatus"><span class="status-dot gray"></span> 语音识别模型: 加载中</span>
+                    <span class="status-pill idle" id="vadStatus"><span class="status-dot gray"></span> 人声识别: 加载中</span>
+                    <span class="status-pill idle" id="spkStatus"><span class="status-dot gray"></span> 音色识别: 加载中</span>
+                    <span class="status-pill idle" id="asrStatus"><span class="status-dot gray"></span> 文字识别: 加载中</span>
                 </span>
                 <span class="status-pill idle" id="recordingStatus"><span class="status-dot gray"></span> 就绪</span>
             </div>
@@ -496,16 +494,18 @@
         const APP_STATE = {
             vadModel: null,
             asrModel: null,
+            spkModel: null,       // CAM++ 音色识别模型
             vadLoaded: false,
             asrLoaded: false,
+            spkLoaded: false,
             isRecording: false,
             audioContext: null,
             scriptProcessor: null,
             mediaStream: null,
             sampleRate: 16000,
-            audioBuffer: null,       // Float32Array 动态缓冲区
+            audioBuffer: null,
             audioBufferLen: 0,
-            vadBuffer: null,         // Float32Array 环形缓冲
+            vadBuffer: null,
             vadBufferLen: 0,
             vadBufferPos: 0,
             vadFrameSize: 512,
@@ -515,8 +515,8 @@
             isSpeaking: false,
             segments: [],
             currentSegmentStart: null,
-            segmentStartIdx: 0,     // 语音段在 audioBuffer 中的起始位置
-            segmentEndIdx: 0,       // 语音段在 audioBuffer 中的结束位置
+            segmentStartIdx: 0,
+            segmentEndIdx: 0,
             vadH: null,
             vadC: null,
             cmvnMean: null,
@@ -526,18 +526,24 @@
             processingQueue: [],
             isProcessing: false,
             _actualSampleRate: 16000,
-            // VAD 推理队列（解耦音频回调）
+            // VAD 推理队列
             vadQueue: [],
             vadRunning: false,
             // 预分配重用缓冲区
             _frameBuf: null,
             _hannWindow: null,
             _melFilterbank: null,
+            // 说话人聚类
+            speakers: [],         // [{id, name, color, centroid: Float32Array}]
+            speakerNextId: 1,
+            speakerThreshold: 0.65, // 余弦相似度阈值
+            _spkMelBuf: null,     // 说话人识别专用 FBank 重用缓冲
         };
 
         // ==================== DOM 元素缓存 ====================
         const $ = (id) => document.getElementById(id);
         const vadStatusEl = $('vadStatus');
+        const spkStatusEl = $('spkStatus');
         const asrStatusEl = $('asrStatus');
         const recordingStatusEl = $('recordingStatus');
         const vuFillEl = $('vuFill');
@@ -760,6 +766,41 @@
             }
         }
 
+        async function loadSPKModel() {
+            try {
+                updateSPKStatus('loading', '音色识别: 加载中...');
+                showProgress('正在加载 CAM++ 音色识别模型...');
+                updateProgress(10, '下载 CAM++ 模型...');
+
+                const modelUrl = './campplus_cn.onnx';
+                const response = await fetch(modelUrl);
+                if (!response.ok) throw new Error('CAM++ model fetch failed');
+                const modelBuffer = await response.arrayBuffer();
+                updateProgress(50, '模型下载完成');
+
+                updateProgress(60, '初始化 ONNX Runtime...');
+                const ortInstance = getOrt();
+                ortInstance.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
+
+                APP_STATE.spkModel = await ortInstance.InferenceSession.create(modelBuffer, {
+                    graphOptimizationLevel: 'all',
+                    executionMode: 'parallel',
+                });
+                APP_STATE.spkLoaded = true;
+                updateProgress(100, '音色识别就绪');
+                updateSPKStatus('loaded', '音色识别: ✅ 已就绪');
+                showToast('CAM++ 音色识别模型加载成功', 'success');
+                hideProgress();
+                updateButtonStates();
+            } catch (error) {
+                console.error('音色识别模型加载失败:', error);
+                updateSPKStatus('error', '音色识别: 加载失败');
+                showToast('音色识别模型加载失败: ' + error.message, 'warning');
+                hideProgress();
+                APP_STATE.spkLoaded = false;
+            }
+        }
+
         async function loadTokenMap() {
             try {
                 const tokenUrl = APP_STATE._tokenMapUrl || 'https://modelscope.cn/models/iic/SenseVoiceSmall-onnx/resolve/master/tokens.json';
@@ -779,6 +820,7 @@
         async function loadAllModels() {
             const promises = [];
             if (!APP_STATE.vadLoaded) promises.push(loadVADModel());
+            if (!APP_STATE.spkLoaded) promises.push(loadSPKModel());
             if (!APP_STATE.asrLoaded) promises.push(loadASRModel());
             if (promises.length === 0) { showToast('模型均已加载', 'info'); return; }
             await Promise.allSettled(promises);
@@ -800,15 +842,23 @@
             if (dot) dot.className = 'status-dot ' + (state === 'loaded' ? 'green' : state === 'loading' ? 'yellow' : state === 'error' ? 'red' : 'gray');
         }
 
+        function updateSPKStatus(state, text) {
+            const labels = { loading: 'loading', loaded: 'active', error: 'error', idle: 'idle' };
+            spkStatusEl.textContent = text;
+            spkStatusEl.className = 'status-pill ' + (labels[state] || 'idle');
+            const dot = spkStatusEl.querySelector('.status-dot');
+            if (dot) dot.className = 'status-dot ' + (state === 'loaded' ? 'green' : state === 'loading' ? 'yellow' : state === 'error' ? 'red' : 'gray');
+        }
+
         function updateButtonStates() {
-            const canRecord = APP_STATE.vadLoaded;
+            const canRecord = APP_STATE.vadLoaded && APP_STATE.spkLoaded;
             btnStartRecord.disabled = !canRecord || APP_STATE.isRecording;
             btnStopRecord.disabled = !APP_STATE.isRecording;
         }
 
         // ==================== 音频捕获 ====================
         async function startRecording() {
-            if (!APP_STATE.vadLoaded) { showToast('请先加载 Silero VAD 模型', 'warning'); return; }
+            if (!APP_STATE.vadLoaded || !APP_STATE.spkLoaded) { showToast('请等待模型加载完成', 'warning'); return; }
             if (APP_STATE.isRecording) return;
 
             try {
@@ -1052,12 +1102,113 @@
             processQueue();
         }
 
+        // ==================== 说话人识别（CAM++ 音色聚类） ====================
+        function computeFBankForSpeaker(audioData, sampleRate) {
+            // 复用 ASR 的 FBank 提取逻辑，但独立实现避免耦合
+            const nFft = 512, hopLength = 160, winLength = 400, nMels = 80;
+            if (!APP_STATE._spkMelBuf) {
+                APP_STATE._spkMelBuf = createMelFilterbank(nFft, sampleRate, nMels);
+            }
+            const melFilterbank = APP_STATE._spkMelBuf;
+            const nFrames = Math.floor((audioData.length - nFft) / hopLength) + 1;
+            if (nFrames <= 0) return null;
+            const fbank = new Float32Array(nFrames * nMels);
+            if (!APP_STATE._hannWindow || APP_STATE._hannWindow.length !== winLength) {
+                APP_STATE._hannWindow = new Float32Array(nFft);
+                for (let i = 0; i < nFft; i++) {
+                    APP_STATE._hannWindow[i] = i < winLength ? 0.54 - 0.46 * Math.cos(2 * Math.PI * i / (winLength - 1)) : 0;
+                }
+            }
+            const hannWindow = APP_STATE._hannWindow;
+            const nFftBins = nFft / 2 + 1;
+            if (!APP_STATE._frameBuf || APP_STATE._frameBuf.length !== nFft) {
+                APP_STATE._frameBuf = new Float32Array(nFft);
+            }
+            const frameBuf = APP_STATE._frameBuf;
+            for (let frame = 0; frame < nFrames; frame++) {
+                const start = frame * hopLength;
+                for (let i = 0; i < nFft; i++) frameBuf[i] = (audioData[start + i] || 0) * hannWindow[i];
+                const magnitude = computeRealFFT(frameBuf, nFft);
+                const offset = frame * nMels;
+                for (let m = 0; m < nMels; m++) {
+                    let sum = 0;
+                    const fb = melFilterbank[m];
+                    for (let j = 0; j < fb.weights.length; j++) {
+                        const bin = fb.startBin + j;
+                        if (bin < nFftBins) sum += fb.weights[j] * magnitude[bin] * magnitude[bin];
+                    }
+                    fbank[offset + m] = Math.log(Math.max(sum, 1e-10));
+                }
+            }
+            return { data: fbank, nFrames, nMels };
+        }
+
+        async function identifySpeaker(audioData, sampleRate) {
+            if (!APP_STATE.spkLoaded || !APP_STATE.spkModel) return null;
+            try {
+                const ortInstance = getOrt();
+                const fbank = computeFBankForSpeaker(audioData, sampleRate);
+                if (!fbank || fbank.nFrames < 1) return null;
+                // CAM++ 输入: [batch, frame_num, 80]
+                const inputTensor = new ortInstance.Tensor('float32', fbank.data, [1, fbank.nFrames, 80]);
+                const results = await APP_STATE.spkModel.run({ feature: inputTensor });
+                const embedding = results.embedding.data; // [1, 192]
+                // L2 归一化
+                let norm = 0;
+                for (let i = 0; i < embedding.length; i++) norm += embedding[i] * embedding[i];
+                norm = Math.sqrt(norm);
+                const normalized = new Float32Array(embedding.length);
+                for (let i = 0; i < embedding.length; i++) normalized[i] = embedding[i] / norm;
+                return classifySpeaker(normalized);
+            } catch (e) {
+                console.error('说话人识别失败:', e);
+                return null;
+            }
+        }
+
+        function cosineSimilarity(a, b) {
+            let dot = 0;
+            for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
+            return dot;
+        }
+
+        function classifySpeaker(embedding) {
+            const SPEAKER_COLORS = [
+                '#a78bfa', '#06b6d4', '#f59e0b', '#22c55e',
+                '#f43f5e', '#3b82f6', '#ec4899', '#14b8a6',
+                '#f97316', '#8b5cf6', '#6366f1', '#84cc16',
+            ];
+            let bestId = null, bestSim = -Infinity;
+            for (const spk of APP_STATE.speakers) {
+                const sim = cosineSimilarity(embedding, spk.centroid);
+                if (sim > bestSim) { bestSim = sim; bestId = spk.id; }
+            }
+            if (bestId !== null && bestSim >= APP_STATE.speakerThreshold) {
+                // 匹配已有说话人，更新质心（指数移动平均）
+                const spk = APP_STATE.speakers.find(s => s.id === bestId);
+                const alpha = 0.3;
+                for (let i = 0; i < spk.centroid.length; i++) {
+                    spk.centroid[i] = spk.centroid[i] * (1 - alpha) + embedding[i] * alpha;
+                }
+                spk.count++;
+                return spk;
+            }
+            // 新说话人
+            const id = APP_STATE.speakerNextId++;
+            const name = '发言人 ' + id;
+            const color = SPEAKER_COLORS[(id - 1) % SPEAKER_COLORS.length];
+            const centroid = new Float32Array(embedding);
+            const spk = { id, name, color, centroid, count: 1 };
+            APP_STATE.speakers.push(spk);
+            return spk;
+        }
+
         // ==================== ASR 处理队列 ====================
         async function processQueue() {
             if (APP_STATE.isProcessing || APP_STATE.processingQueue.length === 0) return;
             if (!APP_STATE.asrLoaded) {
                 const segment = APP_STATE.processingQueue.shift();
-                addTranscriptEntry(segment.startTime, segment.duration, '[语音段 ' + segment.duration.toFixed(1) + '秒 - ASR模型未加载]');
+                addTranscriptEntry(segment.startTime, segment.duration, '[语音段 ' + segment.duration.toFixed(1) + '秒 - ASR模型未加载]', null);
                 processQueue();
                 return;
             }
@@ -1067,12 +1218,15 @@
 
             try {
                 updateRecordingStatus('processing', '识别中...');
-                const text = await runASR(segment.audio, segment.sampleRate);
-                addTranscriptEntry(segment.startTime, segment.duration, text || '[无识别结果]');
+                const [text, speaker] = await Promise.all([
+                    runASR(segment.audio, segment.sampleRate),
+                    identifySpeaker(segment.audio, segment.sampleRate),
+                ]);
+                addTranscriptEntry(segment.startTime, segment.duration, text || '[无识别结果]', speaker);
                 updateRecordingStatus(APP_STATE.isRecording ? 'active' : 'idle', APP_STATE.isRecording ? '录音中' : '已停止');
             } catch (error) {
                 console.error('ASR识别错误:', error);
-                addTranscriptEntry(segment.startTime, segment.duration, '[识别失败: ' + error.message + ']');
+                addTranscriptEntry(segment.startTime, segment.duration, '[识别失败: ' + error.message + ']', null);
                 updateRecordingStatus(APP_STATE.isRecording ? 'active' : 'idle', APP_STATE.isRecording ? '录音中' : '已停止');
             }
 
@@ -1406,14 +1560,17 @@
         }
 
         // ==================== 会议记录管理 ====================
-        function addTranscriptEntry(startTime, duration, text) {
+        function addTranscriptEntry(startTime, duration, text, speaker) {
             const timeStr = formatTime(startTime);
+            const spkName = speaker ? speaker.name : '发言人';
+            const spkColor = speaker ? speaker.color : '#a78bfa';
             const entry = {
                 id: Date.now(),
                 time: timeStr,
                 startTime: startTime,
                 duration: duration,
-                speaker: '发言人',
+                speaker: spkName,
+                speakerColor: spkColor,
                 text: text,
             };
             APP_STATE.segments.push(entry);
@@ -1425,7 +1582,10 @@
         function renderTranscriptEntry(entry) {
             const div = document.createElement('div');
             div.className = 'transcript-entry';
-            div.innerHTML = `<span class="timestamp">${entry.time}</span><span class="speaker-tag">${entry.speaker}</span><span class="text">${escapeHTML(entry.text)}</span><span style="font-size:0.65rem;color:#b0b0b0;margin-left:6px;">(${entry.duration.toFixed(1)}s)</span>`;
+            const tagStyle = `background: ${entry.speakerColor}22; color: ${entry.speakerColor}; border: 1px solid ${entry.speakerColor}44;`;
+            const borderStyle = `border-left-color: ${entry.speakerColor};`;
+            div.style = borderStyle;
+            div.innerHTML = `<span class="timestamp">${entry.time}</span><span class="speaker-tag" style="${tagStyle}">${entry.speaker}</span><span class="text">${escapeHTML(entry.text)}</span><span class="duration">(${entry.duration.toFixed(1)}s)</span>`;
             transcriptContainer.appendChild(div);
             transcriptContainer.scrollTop = transcriptContainer.scrollHeight;
         }
