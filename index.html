@@ -1,0 +1,1517 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>离线会议纪要 - Silero VAD + SenseVoiceSmall</title>
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --bg-card: rgba(255, 255, 255, 0.03);
+            --bg-card-hover: rgba(255, 255, 255, 0.05);
+            --border: rgba(255, 255, 255, 0.06);
+            --text: #e4e4e7;
+            --text-secondary: #a1a1aa;
+            --text-muted: #52525b;
+            --accent: #8b5cf6;
+            --accent-glow: rgba(139, 92, 246, 0.4);
+            --accent-secondary: #06b6d4;
+            --danger: #f43f5e;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --radius: 16px;
+            --radius-sm: 10px;
+            --radius-xs: 6px;
+            --shadow: 0 4px 24px rgba(0,0,0,0.4);
+            --shadow-glow: 0 0 40px var(--accent-glow);
+            --transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+        body::before {
+            content: '';
+            position: fixed;
+            top: -40%;
+            left: -20%;
+            width: 140%;
+            height: 80%;
+            background: radial-gradient(ellipse at 30% 20%, rgba(139, 92, 246, 0.08) 0%, transparent 50%),
+                        radial-gradient(ellipse at 70% 10%, rgba(6, 182, 212, 0.06) 0%, transparent 40%);
+            pointer-events: none;
+            z-index: 0;
+        }
+        .app-container {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 32px 20px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            z-index: 1;
+        }
+        .app-header {
+            text-align: center;
+            padding: 40px 0 32px;
+        }
+        .app-header h1 {
+            font-size: 2.4rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #a78bfa, #8b5cf6, #06b6d4);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -0.03em;
+        }
+        .app-header .subtitle {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-top: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            background: rgba(139, 92, 246, 0.15);
+            color: #a78bfa;
+            border: 1px solid rgba(139, 92, 246, 0.2);
+        }
+        .card {
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-radius: var(--radius);
+            padding: 24px;
+            margin-bottom: 16px;
+            border: 1px solid var(--border);
+            transition: var(--transition);
+        }
+        .card:hover {
+            background: var(--bg-card-hover);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .card-title {
+            font-weight: 600;
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text);
+        }
+        .card-title .status-pill {
+            font-size: 0.7rem;
+            font-weight: 500;
+            padding: 4px 10px;
+        }
+        .card-title .icon { font-size: 1.2rem; }
+        .status-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text-secondary);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            transition: var(--transition);
+        }
+        .status-pill.loading {
+            background: rgba(139, 92, 246, 0.1);
+            color: #a78bfa;
+            border-color: rgba(139, 92, 246, 0.2);
+            animation: pulse-dot 1.5s infinite;
+        }
+        .status-pill.active {
+            background: rgba(34, 197, 94, 0.1);
+            color: var(--success);
+            border-color: rgba(34, 197, 94, 0.2);
+        }
+        .status-pill.speaking {
+            background: rgba(245, 158, 11, 0.1);
+            color: var(--warning);
+            border-color: rgba(245, 158, 11, 0.2);
+            animation: pulse-dot 0.6s infinite;
+        }
+        .status-pill.processing {
+            background: rgba(139, 92, 246, 0.1);
+            color: #a78bfa;
+            border-color: rgba(139, 92, 246, 0.2);
+            animation: pulse-dot 1s infinite;
+        }
+        .status-pill.error {
+            background: rgba(244, 63, 94, 0.1);
+            color: var(--danger);
+            border-color: rgba(244, 63, 94, 0.2);
+        }
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .status-dot.green { background: var(--success); box-shadow: 0 0 8px var(--success); }
+        .status-dot.yellow { background: var(--warning); box-shadow: 0 0 8px var(--warning); }
+        .status-dot.red { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+        .status-dot.gray { background: var(--text-muted); }
+        @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 24px;
+            border-radius: 28px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            transition: var(--transition);
+            white-space: nowrap;
+            font-family: inherit;
+            position: relative;
+            overflow: hidden;
+        }
+        .btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+            color: #fff;
+            box-shadow: 0 4px 16px var(--accent-glow);
+        }
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 24px var(--accent-glow);
+        }
+        .btn-primary:active:not(:disabled) {
+            transform: translateY(0);
+        }
+        .btn-danger {
+            background: rgba(244, 63, 94, 0.15);
+            color: var(--danger);
+            border: 1px solid rgba(244, 63, 94, 0.3);
+        }
+        .btn-danger:hover:not(:disabled) {
+            background: rgba(244, 63, 94, 0.25);
+            box-shadow: 0 4px 16px rgba(244, 63, 94, 0.2);
+        }
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+        .btn-ghost:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text);
+            border-color: rgba(255, 255, 255, 0.12);
+        }
+        .btn-sm {
+            padding: 8px 16px;
+            font-size: 0.75rem;
+            border-radius: 20px;
+        }
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .progress-container { margin: 12px 0; }
+        .progress-bar {
+            height: 4px;
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #8b5cf6, #06b6d4);
+            border-radius: 2px;
+            transition: width 0.4s ease;
+            width: 0%;
+            box-shadow: 0 0 12px var(--accent-glow);
+        }
+        .progress-label {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-top: 6px;
+            display: flex;
+            justify-content: space-between;
+        }
+        .vu-meter {
+            height: 4px;
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: 2px;
+            overflow: hidden;
+            margin: 12px 0 8px;
+        }
+        .vu-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.08s ease, background 0.3s ease;
+            width: 0%;
+            background: linear-gradient(90deg, #22c55e, #22c55e);
+        }
+        .vu-fill.high { background: linear-gradient(90deg, #22c55e, #f59e0b); }
+        .vu-fill.peak { background: linear-gradient(90deg, #f59e0b, #f43f5e); }
+        .recording-controls {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            padding: 16px 0;
+        }
+        .btn-record {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+        }
+        .btn-record .mic-icon {
+            width: 24px;
+            height: 24px;
+        }
+        .btn-record.recording {
+            background: linear-gradient(135deg, #f43f5e, #e11d48);
+            animation: record-pulse 1.5s infinite;
+        }
+        @keyframes record-pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.5); }
+            50% { box-shadow: 0 0 0 12px rgba(244, 63, 94, 0); }
+        }
+        .control-meta {
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            margin-top: 12px;
+        }
+        .control-meta span {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+        .transcript-container {
+            max-height: 450px;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 16px;
+            background: rgba(0, 0, 0, 0.2);
+            font-size: 0.9rem;
+            line-height: 1.8;
+            min-height: 140px;
+        }
+        .transcript-container::-webkit-scrollbar { width: 6px; }
+        .transcript-container::-webkit-scrollbar-track { background: transparent; }
+        .transcript-container::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+        }
+        .transcript-container::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+        .transcript-entry {
+            padding: 12px 14px;
+            margin-bottom: 8px;
+            border-radius: var(--radius-xs);
+            background: rgba(255, 255, 255, 0.02);
+            border-left: 3px solid var(--accent);
+            animation: fadeIn 0.3s ease;
+            transition: var(--transition);
+        }
+        .transcript-entry:hover {
+            background: rgba(255, 255, 255, 0.04);
+        }
+        .transcript-entry .timestamp {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-right: 8px;
+            font-weight: 500;
+            font-variant-numeric: tabular-nums;
+        }
+        .transcript-entry .speaker-tag {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            margin-right: 8px;
+            background: rgba(139, 92, 246, 0.15);
+            color: #a78bfa;
+            border: 1px solid rgba(139, 92, 246, 0.2);
+        }
+        .transcript-entry .text { color: var(--text); }
+        .transcript-entry .duration {
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            margin-left: 6px;
+        }
+        .transcript-placeholder {
+            color: var(--text-muted);
+            text-align: center;
+            padding: 48px 20px;
+            font-style: italic;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .loading-spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(139, 92, 246, 0.3);
+            border-top-color: #a78bfa;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .toast {
+            position: fixed;
+            bottom: 32px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 12px 24px;
+            border-radius: 24px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            z-index: 1000;
+            animation: slideUp 0.3s ease;
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            pointer-events: none;
+        }
+        .toast.info { background: rgba(24, 24, 27, 0.9); color: var(--text); border: 1px solid var(--border); }
+        .toast.success { background: rgba(22, 101, 52, 0.9); color: #fff; border: 1px solid rgba(34, 197, 94, 0.3); }
+        .toast.warning { background: rgba(146, 64, 14, 0.9); color: #fff; border: 1px solid rgba(245, 158, 11, 0.3); }
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateX(-50%) translateY(24px); }
+            to { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+        .footer {
+            text-align: center;
+            padding: 24px 0 16px;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+        }
+        @media (max-width: 640px) {
+            .app-container { padding: 16px 12px; }
+            .card { padding: 18px 16px; }
+            .app-header { padding: 24px 0 20px; }
+            .app-header h1 { font-size: 1.8rem; }
+            .recording-controls { gap: 12px; }
+            .btn-record { width: 56px; height: 56px; }
+            .transcript-container { max-height: 350px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <h1>会议纪要</h1>
+            <p class="subtitle">语音检测 + 智能转写 <span class="badge">离线可用</span></p>
+        </header>
+
+        <!-- 录音控制 -->
+        <div class="card" id="recordingCard">
+            <div class="card-header">
+                <span class="card-title">
+                    <span class="status-pill idle" id="vadStatus"><span class="status-dot gray"></span> 语音检测模型: 加载中</span>
+                    <span class="status-pill idle" id="asrStatus"><span class="status-dot gray"></span> 语音识别模型: 加载中</span>
+                </span>
+                <span class="status-pill idle" id="recordingStatus"><span class="status-dot gray"></span> 就绪</span>
+            </div>
+            <div class="progress-container" id="progressContainer" style="display:none;">
+                <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+                <div class="progress-label"><span id="progressText">正在初始化...</span><span id="progressPercent">0%</span></div>
+            </div>
+            <div class="recording-controls">
+                <button class="btn btn-primary btn-record" id="btnStartRecord" onclick="startRecording()" disabled>
+                    <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+                </button>
+                <button class="btn btn-danger btn-record" id="btnStopRecord" onclick="stopRecording()" disabled style="display:none;">
+                    <svg class="mic-icon" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+                </button>
+            </div>
+            <div class="vu-meter" id="vuMeter"><div class="vu-fill" id="vuFill"></div></div>
+            <div class="control-meta">
+                <span id="audioLevelText">音量: -- dB</span>
+                <span id="vadStateText">VAD: --</span>
+            </div>
+        </div>
+
+        <!-- 会议记录 -->
+        <div class="card" id="transcriptCard" style="flex:1;">
+            <div class="card-header">
+                <span class="card-title">会议记录</span>
+                <div>
+                    <span style="font-size:0.75rem;color:var(--text-muted);" id="segmentCount">0 个语音段</span>
+                    <button class="btn btn-ghost btn-sm" style="margin-left:8px;" onclick="exportTranscript()">导出</button>
+                    <button class="btn btn-ghost btn-sm" style="margin-left:4px;" onclick="copyTranscript()">复制</button>
+                    <button class="btn btn-ghost btn-sm" style="margin-left:4px;" onclick="clearTranscript()">清空</button>
+                </div>
+            </div>
+            <div class="transcript-container" id="transcriptContainer">
+                <div class="transcript-placeholder" id="transcriptPlaceholder">点击麦克风开始录音，会议内容将自动转写并显示在这里...</div>
+            </div>
+        </div>
+
+        <div class="footer">所有处理在浏览器本地完成，数据不会上传</div>
+    </div>
+
+    <div class="toast info" id="toast" style="display:none;"></div>
+
+    <!-- ONNX Runtime Web -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/ort.min.js"></script>
+
+    <script>
+        // ==================== 全局状态 ====================
+        const APP_STATE = {
+            vadModel: null,
+            asrModel: null,
+            vadLoaded: false,
+            asrLoaded: false,
+            isRecording: false,
+            audioContext: null,
+            scriptProcessor: null,
+            mediaStream: null,
+            sampleRate: 16000,
+            audioBuffer: null,       // Float32Array 动态缓冲区
+            audioBufferLen: 0,
+            vadBuffer: null,         // Float32Array 环形缓冲
+            vadBufferLen: 0,
+            vadBufferPos: 0,
+            vadFrameSize: 512,
+            vadThreshold: 0.5,
+            vadSilenceFrames: 0,
+            vadSilenceThreshold: 15,
+            isSpeaking: false,
+            segments: [],
+            currentSegmentStart: null,
+            segmentStartIdx: 0,     // 语音段在 audioBuffer 中的起始位置
+            segmentEndIdx: 0,       // 语音段在 audioBuffer 中的结束位置
+            vadH: null,
+            vadC: null,
+            cmvnMean: null,
+            cmvnVar: null,
+            tokenMap: null,
+            currentLanguage: 'zh',
+            processingQueue: [],
+            isProcessing: false,
+            _actualSampleRate: 16000,
+            // VAD 推理队列（解耦音频回调）
+            vadQueue: [],
+            vadRunning: false,
+            // 预分配重用缓冲区
+            _frameBuf: null,
+            _hannWindow: null,
+            _melFilterbank: null,
+        };
+
+        // ==================== DOM 元素缓存 ====================
+        const $ = (id) => document.getElementById(id);
+        const vadStatusEl = $('vadStatus');
+        const asrStatusEl = $('asrStatus');
+        const recordingStatusEl = $('recordingStatus');
+        const vuFillEl = $('vuFill');
+        const audioLevelTextEl = $('audioLevelText');
+        const vadStateTextEl = $('vadStateText');
+        const transcriptContainer = $('transcriptContainer');
+        const transcriptPlaceholder = $('transcriptPlaceholder');
+        const segmentCountEl = $('segmentCount');
+        const progressContainer = $('progressContainer');
+        const progressFill = $('progressFill');
+        const progressText = $('progressText');
+        const progressPercent = $('progressPercent');
+        const btnStartRecord = $('btnStartRecord');
+        const btnStopRecord = $('btnStopRecord');
+        const toastEl = $('toast');
+
+        // ==================== 工具函数 ====================
+        function getOrt() {
+            if (typeof ort !== 'undefined') return ort;
+            throw new Error('ONNX Runtime 未加载，请检查网络后刷新页面');
+        }
+
+        function showToast(message, type = 'info') {
+            toastEl.textContent = message;
+            toastEl.className = `toast ${type}`;
+            toastEl.style.display = 'block';
+            // 不再 clearTimeout，允许多个 toast 堆叠显示
+            setTimeout(() => { toastEl.style.display = 'none'; }, 3000);
+        }
+
+        function showProgress(label) {
+            progressContainer.style.display = 'block';
+            progressText.textContent = label;
+            progressFill.style.width = '0%';
+            progressPercent.textContent = '0%';
+        }
+
+        function updateProgress(percent, label) {
+            progressFill.style.width = Math.min(100, percent) + '%';
+            progressPercent.textContent = Math.round(percent) + '%';
+            if (label) progressText.textContent = label;
+        }
+
+        function hideProgress() {
+            progressContainer.style.display = 'none';
+            progressFill.style.width = '0%';
+        }
+
+        function formatTime(date) {
+            const d = date instanceof Date ? date : new Date(date);
+            return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+        }
+
+        function formatDate(date) {
+            const d = date instanceof Date ? date : new Date(date);
+            return d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2) + ('0' + d.getDate()).slice(-2) + '_' + ('0' + d.getHours()).slice(-2) + ('0' + d.getMinutes()).slice(-2);
+        }
+
+        function escapeHTML(str) {
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        // ==================== 重采样（带简单低通滤波） ====================
+        function resampleAudio(inputData, fromRate, toRate) {
+            const ratio = fromRate / toRate;
+            const outputLength = Math.floor(inputData.length / ratio);
+            const output = new Float32Array(outputLength);
+            // 简单移动平均低通滤波
+            const filterLen = Math.max(1, Math.floor(ratio));
+            for (let i = 0; i < outputLength; i++) {
+                let sum = 0;
+                let count = 0;
+                const center = i * ratio;
+                for (let j = -filterLen; j <= filterLen; j++) {
+                    const idx = Math.round(center + j);
+                    if (idx >= 0 && idx < inputData.length) {
+                        sum += inputData[idx];
+                        count++;
+                    }
+                }
+                output[i] = count > 0 ? sum / count : 0;
+            }
+            return output;
+        }
+
+        // ==================== 音频缓冲区管理（Float32Array） ====================
+        function ensureAudioBufCapacity(buf, needed, growFactor) {
+            if (needed <= buf.length) return buf;
+            const newLen = Math.max(needed, Math.floor(buf.length * (growFactor || 1.5)));
+            const next = new Float32Array(newLen);
+            next.set(buf);
+            return next;
+        }
+
+        function pushToAudioBuf(data) {
+            APP_STATE.audioBuffer = ensureAudioBufCapacity(APP_STATE.audioBuffer, APP_STATE.audioBufferLen + data.length, 1.5);
+            APP_STATE.audioBuffer.set(data, APP_STATE.audioBufferLen);
+            APP_STATE.audioBufferLen += data.length;
+        }
+
+        function drainAudioBuf(count) {
+            const out = APP_STATE.audioBuffer.subarray(0, count);
+            APP_STATE.audioBuffer.copyWithin(0, count, APP_STATE.audioBufferLen);
+            APP_STATE.audioBufferLen -= count;
+            return out;
+        }
+
+        function pushToVadBuf(data) {
+            const needed = APP_STATE.vadBufferLen + data.length;
+            APP_STATE.vadBuffer = ensureAudioBufCapacity(APP_STATE.vadBuffer, needed, 2);
+            APP_STATE.vadBuffer.set(data, APP_STATE.vadBufferPos);
+            APP_STATE.vadBufferLen += data.length;
+        }
+
+        function drainVadBuf(count) {
+            const out = APP_STATE.vadBuffer.subarray(APP_STATE.vadBufferPos, APP_STATE.vadBufferPos + count);
+            APP_STATE.vadBufferPos += count;
+            APP_STATE.vadBufferLen -= count;
+            // 当读取位置超过缓冲区一半时，压缩数据
+            if (APP_STATE.vadBufferPos > APP_STATE.vadBuffer.length / 2) {
+                APP_STATE.vadBuffer.copyWithin(0, APP_STATE.vadBufferPos, APP_STATE.vadBufferPos + APP_STATE.vadBufferLen);
+                APP_STATE.vadBufferPos = 0;
+            }
+            return out;
+        }
+
+        // ==================== 模型加载 ====================
+        async function loadVADModel() {
+            try {
+                updateVADStatus('loading', 'Silero VAD: 加载中...');
+                showProgress('正在加载 Silero VAD 模型...');
+                updateProgress(10, '下载 Silero VAD ONNX 模型...');
+
+                const vadModelUrl = './silero_vad.onnx';
+
+                let modelBuffer;
+                const response = await fetch(vadModelUrl);
+                if (!response.ok) throw new Error('VAD model fetch failed');
+                modelBuffer = await response.arrayBuffer();
+                updateProgress(50, 'VAD 模型加载完成');
+
+                updateProgress(60, '初始化 ONNX Runtime...');
+                const ortInstance = getOrt();
+                // 配置 WASM 路径
+                ortInstance.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
+
+                APP_STATE.vadModel = await ortInstance.InferenceSession.create(modelBuffer, {
+                    graphOptimizationLevel: 'all',
+                    executionMode: 'parallel',
+                });
+                APP_STATE.vadLoaded = true;
+                updateProgress(100, 'VAD 模型就绪');
+                updateVADStatus('loaded', 'Silero VAD: ✅ 已就绪');
+                showToast('Silero VAD 模型加载成功！', 'success');
+                hideProgress();
+                updateButtonStates();
+            } catch (error) {
+                console.error('VAD模型加载失败:', error);
+                updateVADStatus('error', 'Silero VAD: ❌ 加载失败');
+                showToast('VAD模型加载失败: ' + error.message, 'warning');
+                hideProgress();
+                APP_STATE.vadLoaded = false;
+            }
+        }
+
+        async function loadASRModel() {
+            try {
+                updateASRStatus('loading', 'SenseVoiceSmall: 加载中...');
+                showProgress('正在加载 SenseVoiceSmall 模型...');
+                updateProgress(5, '准备下载 SenseVoiceSmall ONNX 模型...');
+
+                const MODEL_URL = './model_quant.onnx';
+                const asrModelUrl = APP_STATE._asrModelUrl || MODEL_URL;
+
+                updateProgress(10, '加载 SenseVoiceSmall 量化模型...');
+
+                let modelBuffer;
+                try {
+                    const response = await fetch(asrModelUrl);
+                    if (!response.ok) throw new Error('ASR model fetch failed: ' + response.status);
+                    modelBuffer = await response.arrayBuffer();
+                } catch (e) {
+                    console.error('模型下载失败:', e);
+                    throw new Error('SenseVoiceSmall模型下载失败: ' + e.message);
+                }
+
+                updateProgress(75, '初始化 ONNX Runtime...');
+                const ortInstance = getOrt();
+                ortInstance.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
+
+                APP_STATE.asrModel = await ortInstance.InferenceSession.create(modelBuffer, {
+                    graphOptimizationLevel: 'all',
+                    executionMode: 'parallel',
+                });
+                APP_STATE.asrLoaded = true;
+
+                const inputNames = APP_STATE.asrModel.inputNames;
+                const outputNames = APP_STATE.asrModel.outputNames;
+                console.log('SenseVoiceSmall 模型输入:', inputNames);
+                console.log('SenseVoiceSmall 模型输出:', outputNames);
+
+                if (inputNames.length > 0) APP_STATE.asrInputName = inputNames[0];
+                if (outputNames.length > 0) APP_STATE.asrOutputName = outputNames[0];
+
+                updateProgress(95, '加载 Token 映射表和 CMVN 参数...');
+                await loadTokenMap();
+                await loadCMVN();
+
+                updateProgress(100, 'SenseVoiceSmall 模型就绪');
+                updateASRStatus('loaded', 'SenseVoiceSmall: ✅ 已就绪');
+                showToast('SenseVoiceSmall 模型加载成功！', 'success');
+                hideProgress();
+                updateButtonStates();
+            } catch (error) {
+                console.error('ASR模型加载失败:', error);
+                updateASRStatus('error', 'SenseVoiceSmall: ❌ 加载失败');
+                showToast('ASR模型加载失败: ' + error.message, 'warning');
+                hideProgress();
+                APP_STATE.asrLoaded = false;
+            }
+        }
+
+        async function loadTokenMap() {
+            try {
+                const tokenUrl = APP_STATE._tokenMapUrl || 'https://modelscope.cn/models/iic/SenseVoiceSmall-onnx/resolve/master/tokens.json';
+                const resp = await fetch(tokenUrl, { cache: 'force-cache', mode: 'cors' });
+                if (resp.ok) {
+                    APP_STATE.tokenMap = await resp.json();
+                    console.log('Token映射表加载成功，共', Object.keys(APP_STATE.tokenMap).length, '个token');
+                    return;
+                }
+            } catch (e) {
+                console.warn('Token映射表加载失败，使用空映射:', e.message);
+            }
+            // 不使用假映射，直接使用空对象，decodeTokens 会回退到 fromCharCode
+            APP_STATE.tokenMap = {};
+        }
+
+        async function loadAllModels() {
+            const promises = [];
+            if (!APP_STATE.vadLoaded) promises.push(loadVADModel());
+            if (!APP_STATE.asrLoaded) promises.push(loadASRModel());
+            if (promises.length === 0) { showToast('模型均已加载', 'info'); return; }
+            await Promise.allSettled(promises);
+        }
+
+        function updateVADStatus(state, text) {
+            const labels = { loading: 'loading', loaded: 'active', error: 'error', idle: 'idle' };
+            vadStatusEl.textContent = text;
+            vadStatusEl.className = 'status-pill ' + (labels[state] || 'idle');
+            const dot = vadStatusEl.querySelector('.status-dot');
+            if (dot) dot.className = 'status-dot ' + (state === 'loaded' ? 'green' : state === 'loading' ? 'yellow' : state === 'error' ? 'red' : 'gray');
+        }
+
+        function updateASRStatus(state, text) {
+            const labels = { loading: 'loading', loaded: 'active', error: 'error', idle: 'idle' };
+            asrStatusEl.textContent = text;
+            asrStatusEl.className = 'status-pill ' + (labels[state] || 'idle');
+            const dot = asrStatusEl.querySelector('.status-dot');
+            if (dot) dot.className = 'status-dot ' + (state === 'loaded' ? 'green' : state === 'loading' ? 'yellow' : state === 'error' ? 'red' : 'gray');
+        }
+
+        function updateButtonStates() {
+            const canRecord = APP_STATE.vadLoaded;
+            btnStartRecord.disabled = !canRecord || APP_STATE.isRecording;
+            btnStopRecord.disabled = !APP_STATE.isRecording;
+        }
+
+        // ==================== 音频捕获 ====================
+        async function startRecording() {
+            if (!APP_STATE.vadLoaded) { showToast('请先加载 Silero VAD 模型', 'warning'); return; }
+            if (APP_STATE.isRecording) return;
+
+            try {
+                APP_STATE.mediaStream = await navigator.mediaDevices.getUserMedia({
+                    audio: { channelCount: 1, sampleRate: { ideal: 16000 }, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+                });
+
+                APP_STATE.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                if (APP_STATE.audioContext.state === 'suspended') {
+                    await APP_STATE.audioContext.resume();
+                }
+
+                const actualSampleRate = APP_STATE.audioContext.sampleRate;
+                console.log('AudioContext 采样率:', actualSampleRate);
+                APP_STATE._actualSampleRate = actualSampleRate;
+
+                const source = APP_STATE.audioContext.createMediaStreamSource(APP_STATE.mediaStream);
+                const bufferSize = 512;
+                APP_STATE.scriptProcessor = APP_STATE.audioContext.createScriptProcessor(bufferSize, 1, 1);
+
+                APP_STATE.scriptProcessor.onaudioprocess = (event) => {
+                    if (!APP_STATE.isRecording) return;
+                    const inputData = event.inputBuffer.getChannelData(0);
+                    // 复制数据避免引用被覆盖
+                    processAudioFrame(new Float32Array(inputData), actualSampleRate);
+                };
+
+                source.connect(APP_STATE.scriptProcessor);
+                APP_STATE.scriptProcessor.connect(APP_STATE.audioContext.destination);
+
+                // 初始化缓冲区
+                APP_STATE.audioBuffer = new Float32Array(16000 * 30); // 预分配30秒
+                APP_STATE.audioBufferLen = 0;
+                APP_STATE.vadBuffer = new Float32Array(16000 * 5); // 预分配5秒VAD缓冲
+                APP_STATE.vadBufferLen = 0;
+                APP_STATE.vadBufferPos = 0;
+                APP_STATE.vadSilenceFrames = 0;
+                APP_STATE.isSpeaking = false;
+                APP_STATE.currentSegmentStart = null;
+                APP_STATE.processingQueue = [];
+                APP_STATE.isProcessing = false;
+                APP_STATE.vadQueue = [];
+                APP_STATE.vadRunning = false;
+                APP_STATE.vadH = null;
+                APP_STATE.vadC = null;
+                APP_STATE.segmentStartIdx = 0;
+                APP_STATE.segmentEndIdx = 0;
+
+                APP_STATE.isRecording = true;
+                toggleRecordingButtons(true);
+                updateRecordingStatus('active', '录音中');
+                updateButtonStates();
+                showToast('开始录音 - VAD检测已激活', 'info');
+
+                // 启动 VAD 推理循环（异步，不阻塞音频回调）
+                runVADLoop();
+
+            } catch (error) {
+                console.error('录音启动失败:', error);
+                showToast('无法访问麦克风: ' + error.message, 'warning');
+                updateRecordingStatus('error', '❌ 麦克风错误');
+            }
+        }
+
+        function stopRecording() {
+            if (!APP_STATE.isRecording) return;
+            APP_STATE.isRecording = false;
+
+            if (APP_STATE.isSpeaking) {
+                APP_STATE.segmentEndIdx = APP_STATE.audioBufferLen;
+                finalizeSegment();
+            }
+
+            if (APP_STATE.scriptProcessor) { APP_STATE.scriptProcessor.disconnect(); APP_STATE.scriptProcessor = null; }
+            if (APP_STATE.audioContext) { APP_STATE.audioContext.close().catch(console.warn); APP_STATE.audioContext = null; }
+            if (APP_STATE.mediaStream) { APP_STATE.mediaStream.getTracks().forEach(t => t.stop()); APP_STATE.mediaStream = null; }
+
+            APP_STATE.vadH = null;
+            APP_STATE.vadC = null;
+
+            updateRecordingStatus('idle', '已停止');
+            toggleRecordingButtons(false);
+            updateButtonStates();
+            vuFillEl.style.width = '0%';
+            vuFillEl.className = 'vu-fill';
+            audioLevelTextEl.textContent = '音量: -- dB';
+            vadStateTextEl.textContent = 'VAD: --';
+            showToast('录音已停止', 'info');
+        }
+
+        function updateRecordingStatus(state, text) {
+            recordingStatusEl.textContent = text;
+            recordingStatusEl.className = 'status-pill ' + state;
+            const dot = recordingStatusEl.querySelector('.status-dot');
+            if (dot) dot.className = 'status-dot ' + (state === 'active' ? 'green' : state === 'speaking' ? 'yellow' : state === 'error' ? 'red' : 'gray');
+        }
+
+        // ==================== 音频处理（轻量级，不阻塞） ====================
+        function processAudioFrame(inputData, actualSampleRate) {
+            let samples16k;
+            if (actualSampleRate === 16000) {
+                samples16k = inputData;
+            } else {
+                samples16k = resampleAudio(inputData, actualSampleRate, 16000);
+            }
+
+            // 计算音量 (RMS)
+            let sumSq = 0;
+            for (let i = 0; i < samples16k.length; i++) { sumSq += samples16k[i] * samples16k[i]; }
+            const rms = Math.sqrt(sumSq / samples16k.length);
+            const db = rms > 0 ? 20 * Math.log10(rms) : -Infinity;
+
+            const vuLevel = Math.min(100, Math.max(0, (db + 60) * 2.5));
+            vuFillEl.style.width = vuLevel + '%';
+            vuFillEl.className = 'vu-fill' + (vuLevel > 75 ? ' peak' : vuLevel > 50 ? ' high' : '');
+            audioLevelTextEl.textContent = '音量: ' + (db === -Infinity ? '-∞' : db.toFixed(1)) + ' dB';
+
+            // 始终积累到 VAD 缓冲
+            pushToVadBuf(samples16k);
+
+            // 始终积累到语音段缓冲（用于后续截取）
+            pushToAudioBuf(samples16k);
+
+            // 从 VAD 缓冲中提取帧放入推理队列
+            while (APP_STATE.vadBufferLen >= APP_STATE.vadFrameSize) {
+                const frame = drainVadBuf(APP_STATE.vadFrameSize);
+                APP_STATE.vadQueue.push(frame);
+            }
+        }
+
+        // ==================== VAD 异步推理循环 ====================
+        async function runVADLoop() {
+            if (!APP_STATE.isRecording) return;
+
+            if (APP_STATE.vadQueue.length > 0 && !APP_STATE.vadRunning) {
+                APP_STATE.vadRunning = true;
+                const frame = APP_STATE.vadQueue.shift();
+                const speechProb = await runVADAsync(frame);
+                handleVADResult(speechProb, frame);
+                APP_STATE.vadRunning = false;
+            }
+
+            // 下一帧
+            requestAnimationFrame(() => runVADLoop());
+        }
+
+        async function runVADAsync(audioFrame) {
+            if (!APP_STATE.vadLoaded || !APP_STATE.vadModel) return 0;
+
+            try {
+                const ortInstance = getOrt();
+
+                // 初始化状态张量
+                if (!APP_STATE.vadH || !APP_STATE.vadC) {
+                    const hData = new Float32Array(128).fill(0); // [2, 1, 64] = 128
+                    const cData = new Float32Array(128).fill(0);
+                    APP_STATE.vadH = new ortInstance.Tensor('float32', hData, [2, 1, 64]);
+                    APP_STATE.vadC = new ortInstance.Tensor('float32', cData, [2, 1, 64]);
+                }
+
+                const inputTensor = new ortInstance.Tensor('float32', audioFrame, [1, audioFrame.length]);
+                const srTensor = new ortInstance.Tensor('int64', new BigInt64Array([BigInt(16000)]), [1]);
+
+                const inputNames = APP_STATE.vadModel.inputNames;
+                const feeds = {};
+                feeds[inputNames[0]] = inputTensor;
+                feeds[inputNames[1]] = srTensor;
+                feeds[inputNames[2]] = APP_STATE.vadH;
+                feeds[inputNames[3]] = APP_STATE.vadC;
+
+                const results = await APP_STATE.vadModel.run(feeds);
+                const outputName = APP_STATE.vadModel.outputNames[0];
+                const outputData = results[outputName].data;
+
+                const outNames = APP_STATE.vadModel.outputNames;
+                if (outNames.length >= 3) {
+                    APP_STATE.vadH = results[outNames[1]];
+                    APP_STATE.vadC = results[outNames[2]];
+                }
+
+                return outputData[0] || 0;
+            } catch (error) {
+                console.error('VAD推理错误:', error);
+                return 0;
+            }
+        }
+
+        function handleVADResult(speechProb, audioFrame) {
+            const isSpeech = speechProb > APP_STATE.vadThreshold;
+
+            vadStateTextEl.textContent = 'VAD: ' + (isSpeech ? '语音 ' : '静音 ') + speechProb.toFixed(2);
+
+            if (isSpeech) {
+                APP_STATE.vadSilenceFrames = 0;
+                if (!APP_STATE.isSpeaking) {
+                    APP_STATE.isSpeaking = true;
+                    APP_STATE.segmentStartIdx = APP_STATE.audioBufferLen - audioFrame.length;
+                    if (APP_STATE.segmentStartIdx < 0) APP_STATE.segmentStartIdx = 0;
+                    APP_STATE.currentSegmentStart = new Date();
+                    updateRecordingStatus('speaking', '检测到语音');
+                    console.log('语音段开始, startIdx:', APP_STATE.segmentStartIdx);
+                }
+                APP_STATE.segmentEndIdx = APP_STATE.audioBufferLen;
+            } else if (APP_STATE.isSpeaking) {
+                APP_STATE.vadSilenceFrames++;
+                APP_STATE.segmentEndIdx = APP_STATE.audioBufferLen;
+                if (APP_STATE.vadSilenceFrames >= APP_STATE.vadSilenceThreshold) {
+                    finalizeSegment();
+                }
+            }
+        }
+
+        function finalizeSegment() {
+            const segLen = APP_STATE.segmentEndIdx - APP_STATE.segmentStartIdx;
+            if (segLen < APP_STATE.vadFrameSize * 2) {
+                APP_STATE.isSpeaking = false;
+                APP_STATE.vadSilenceFrames = 0;
+                updateRecordingStatus('active', '录音中');
+                return;
+            }
+
+            const segmentAudio = new Float32Array(
+                APP_STATE.audioBuffer.subarray(APP_STATE.segmentStartIdx, APP_STATE.segmentEndIdx)
+            );
+            const duration = segmentAudio.length / APP_STATE.sampleRate;
+            const startTime = APP_STATE.currentSegmentStart || new Date();
+
+            console.log('语音段结束，时长:', duration.toFixed(2), '秒，样本数:', segmentAudio.length);
+
+            APP_STATE.processingQueue.push({
+                audio: segmentAudio,
+                startTime: startTime,
+                duration: duration,
+                sampleRate: APP_STATE.sampleRate,
+            });
+
+            APP_STATE.isSpeaking = false;
+            APP_STATE.vadSilenceFrames = 0;
+            updateRecordingStatus('active', '录音中');
+
+            processQueue();
+        }
+
+        // ==================== ASR 处理队列 ====================
+        async function processQueue() {
+            if (APP_STATE.isProcessing || APP_STATE.processingQueue.length === 0) return;
+            if (!APP_STATE.asrLoaded) {
+                const segment = APP_STATE.processingQueue.shift();
+                addTranscriptEntry(segment.startTime, segment.duration, '[语音段 ' + segment.duration.toFixed(1) + '秒 - ASR模型未加载]');
+                processQueue();
+                return;
+            }
+
+            APP_STATE.isProcessing = true;
+            const segment = APP_STATE.processingQueue.shift();
+
+            try {
+                updateRecordingStatus('processing', '识别中...');
+                const text = await runASR(segment.audio, segment.sampleRate);
+                addTranscriptEntry(segment.startTime, segment.duration, text || '[无识别结果]');
+                updateRecordingStatus(APP_STATE.isRecording ? 'active' : 'idle', APP_STATE.isRecording ? '录音中' : '已停止');
+            } catch (error) {
+                console.error('ASR识别错误:', error);
+                addTranscriptEntry(segment.startTime, segment.duration, '[识别失败: ' + error.message + ']');
+                updateRecordingStatus(APP_STATE.isRecording ? 'active' : 'idle', APP_STATE.isRecording ? '录音中' : '已停止');
+            }
+
+            APP_STATE.isProcessing = false;
+            if (APP_STATE.processingQueue.length > 0) {
+                setTimeout(() => processQueue(), 100);
+            }
+        }
+
+        // ==================== FBank 特征提取 ====================
+        function computeFBank(audioData, sampleRate) {
+            const nFft = 512; // 修正：SenseVoiceSmall 使用 n_fft=512
+            const hopLength = 160;
+            const winLength = 400;
+            const nMels = 80;
+
+            if (!APP_STATE._melFilterbank) {
+                APP_STATE._melFilterbank = createMelFilterbank(nFft, sampleRate, nMels);
+            }
+            const melFilterbank = APP_STATE._melFilterbank;
+
+            const nFrames = Math.floor((audioData.length - nFft) / hopLength) + 1;
+            if (nFrames <= 0) return null;
+
+            const fbankFeatures = new Float32Array(nFrames * nMels);
+
+            if (!APP_STATE._hannWindow || APP_STATE._hannWindow.length !== winLength) {
+                APP_STATE._hannWindow = new Float32Array(nFft);
+                for (let i = 0; i < nFft; i++) {
+                    APP_STATE._hannWindow[i] = i < winLength ? 0.54 - 0.46 * Math.cos(2 * Math.PI * i / (winLength - 1)) : 0;
+                }
+            }
+            const hannWindow = APP_STATE._hannWindow;
+
+            const nFftBins = nFft / 2 + 1;
+            // 预分配帧缓冲区
+            if (!APP_STATE._frameBuf || APP_STATE._frameBuf.length !== nFft) {
+                APP_STATE._frameBuf = new Float32Array(nFft);
+            }
+            const frameBuf = APP_STATE._frameBuf;
+
+            for (let frame = 0; frame < nFrames; frame++) {
+                const start = frame * hopLength;
+                // 加窗
+                for (let i = 0; i < nFft; i++) frameBuf[i] = (audioData[start + i] || 0) * hannWindow[i];
+
+                // 简化的实数 FFT（使用 radix-2 近似）
+                const magnitude = computeRealFFT(frameBuf, nFft);
+
+                // Mel 滤波 + 对数能量
+                const offset = frame * nMels;
+                for (let m = 0; m < nMels; m++) {
+                    let sum = 0;
+                    const fb = melFilterbank[m];
+                    for (let j = 0; j < fb.weights.length; j++) {
+                        const bin = fb.startBin + j;
+                        if (bin < nFftBins) sum += fb.weights[j] * magnitude[bin] * magnitude[bin];
+                    }
+                    fbankFeatures[offset + m] = Math.log(Math.max(sum, 1e-10));
+                }
+            }
+            return { data: fbankFeatures, nFrames, nMels };
+        }
+
+        function computeRealFFT(signal, nFft) {
+            // 使用迭代 Cooley-Tukey FFT 计算实数信号的幅度谱
+            const nFftBins = nFft / 2 + 1;
+            const magnitude = new Float32Array(nFftBins);
+
+            // 位反转重排
+            const re = new Float32Array(nFft);
+            const im = new Float32Array(nFft);
+            re.set(signal);
+
+            let j = 0;
+            for (let i = 0; i < nFft - 1; i++) {
+                if (i < j) {
+                    let tmp = re[i]; re[i] = re[j]; re[j] = tmp;
+                    tmp = im[i]; im[i] = im[j]; im[j] = tmp;
+                }
+                let k = nFft / 2;
+                while (k <= j) { j -= k; k /= 2; }
+                j += k;
+            }
+
+            // 蝶形运算
+            let size = 2;
+            while (size <= nFft) {
+                const halfSize = size / 2;
+                const angle = -2 * Math.PI / size;
+                const wRe = Math.cos(angle);
+                const wIm = Math.sin(angle);
+                let curRe = 1, curIm = 0;
+                for (let k = 0; k < halfSize; k++) {
+                    for (let start = k; start < nFft; start += size) {
+                        const tRe = curRe * re[start + halfSize] - curIm * im[start + halfSize];
+                        const tIm = curRe * im[start + halfSize] + curIm * re[start + halfSize];
+                        re[start + halfSize] = re[start] - tRe;
+                        im[start + halfSize] = im[start] - tIm;
+                        re[start] += tRe;
+                        im[start] += tIm;
+                    }
+                    const newRe = curRe * wRe - curIm * wIm;
+                    curIm = curRe * wIm + curIm * wRe;
+                    curRe = newRe;
+                }
+                size *= 2;
+            }
+
+            for (let k = 0; k < nFftBins; k++) {
+                magnitude[k] = Math.sqrt(re[k] * re[k] + im[k] * im[k]) / nFft;
+            }
+            return magnitude;
+        }
+
+        function createMelFilterbank(nFft, sampleRate, nMels) {
+            const fMin = 0;
+            const fMax = sampleRate / 2;
+            const nFftBins = nFft / 2 + 1;
+
+            function toMel(hz) { return 2595 * Math.log10(1 + hz / 700); }
+            function fromMel(mel) { return 700 * (Math.pow(10, mel / 2595) - 1); }
+
+            const melMin = toMel(fMin);
+            const melMax = toMel(fMax);
+            const melPoints = [];
+            for (let i = 0; i <= nMels + 1; i++) {
+                melPoints.push(melMin + (melMax - melMin) * i / (nMels + 1));
+            }
+
+            const hzPoints = melPoints.map(fromMel);
+            const binPoints = hzPoints.map(hz => Math.floor((nFft + 1) * hz / sampleRate));
+
+            const filters = [];
+            for (let m = 1; m <= nMels; m++) {
+                const weights = [];
+                const startBin = binPoints[m - 1];
+                const centerBin = binPoints[m];
+                const endBin = binPoints[m + 1];
+                for (let k = startBin; k <= endBin && k < nFftBins; k++) {
+                    let w;
+                    if (k < centerBin) w = (k - startBin) / Math.max(1, centerBin - startBin);
+                    else w = (endBin - k) / Math.max(1, endBin - centerBin);
+                    weights.push(w);
+                }
+                filters.push({ startBin, endBin: Math.min(endBin, nFftBins - 1), weights });
+            }
+            return filters;
+        }
+
+        async function loadCMVN() {
+            try {
+                const response = await fetch('https://modelscope.cn/models/iic/SenseVoiceSmall-onnx/resolve/master/am.mvn', { cache: 'force-cache', mode: 'cors' });
+                if (response.ok) {
+                    const data = await response.json();
+                    APP_STATE.cmvnMean = data.mean || data.global_cmvn_mean;
+                    APP_STATE.cmvnVar = data.var || data.global_cmvn_var;
+                    console.log('CMVN 参数已加载');
+                    return;
+                }
+            } catch (e) {
+                console.warn('CMVN 加载失败，使用默认值:', e.message);
+            }
+            APP_STATE.cmvnMean = new Float32Array(80).fill(-1.6);
+            APP_STATE.cmvnVar = new Float32Array(80).fill(1.0);
+        }
+
+        function applyCMVN(fbankData, nFrames, nMels) {
+            const normalized = new Float32Array(fbankData.length);
+            const mean = APP_STATE.cmvnMean;
+            const var_ = APP_STATE.cmvnVar;
+            for (let t = 0; t < nFrames; t++) {
+                for (let m = 0; m < nMels; m++) {
+                    const idx = t * nMels + m;
+                    normalized[idx] = (fbankData[idx] - mean[m]) / Math.sqrt(var_[m]);
+                }
+            }
+            return normalized;
+        }
+
+        // SenseVoiceSmall 需要 560 维输入 = 80维FBank * 7帧上下文
+        function expandFBankTo560(fbankData, nFrames, nMels) {
+            const ctxSize = 7; // 7帧上下文
+            const featDim = 560; // 80 * 7
+            const output = new Float32Array(nFrames * featDim);
+            const halfCtx = Math.floor(ctxSize / 2); // 3
+
+            for (let t = 0; t < nFrames; t++) {
+                for (let c = 0; c < ctxSize; c++) {
+                    const srcT = Math.max(0, Math.min(nFrames - 1, t - halfCtx + c));
+                    for (let m = 0; m < nMels; m++) {
+                        output[t * featDim + c * nMels + m] = fbankData[srcT * nMels + m];
+                    }
+                }
+            }
+            return output;
+        }
+
+        // ==================== SenseVoiceSmall ASR ====================
+        async function runASR(audioData, sampleRate) {
+            if (!APP_STATE.asrLoaded || !APP_STATE.asrModel) throw new Error('ASR模型未加载');
+
+            let audio16k = audioData;
+            if (sampleRate !== 16000) {
+                audio16k = resampleAudio(audioData, sampleRate, 16000);
+            }
+
+            const ortInstance = getOrt();
+            const inputNames = APP_STATE.asrModel.inputNames;
+            const outputNames = APP_STATE.asrModel.outputNames;
+
+            console.log('ASR 模型输入:', inputNames);
+            console.log('ASR 模型输出:', outputNames);
+
+            const feeds = {};
+            let useFBank = true;
+            const primaryInput = inputNames[0];
+
+            // SenseVoiceSmall 通常使用 FBank 特征
+            // 检测输入名：speech 或 feats -> FBank, waveform -> 原始波形
+            if (primaryInput.includes('waveform') || primaryInput.includes('wav')) {
+                useFBank = false;
+                console.log('模型接受原始波形输入');
+                feeds[primaryInput] = new ortInstance.Tensor('float32', new Float32Array(audio16k), [1, audio16k.length]);
+            } else {
+                console.log('模型需要 FBank 特征输入 (560维)');
+                const fbank = computeFBank(audio16k, 16000);
+                if (!fbank || fbank.nFrames <= 0) return '[音频太短，无法识别]';
+                const normalized = applyCMVN(fbank.data, fbank.nFrames, fbank.nMels);
+                // SenseVoiceSmall 期望 560 维输入 (80 * 7帧上下文拼接)
+                const speech560 = expandFBankTo560(normalized, fbank.nFrames, fbank.nMels);
+                feeds[primaryInput] = new ortInstance.Tensor('float32', speech560, [1, fbank.nFrames, 560]);
+            }
+
+            // 处理额外输入（speech_lengths, language, textnorm 等）
+            for (let i = 1; i < inputNames.length; i++) {
+                const name = inputNames[i];
+                if (name.includes('length') || name.includes('len') || name.includes('speech_lengths')) {
+                    const seqLen = useFBank ? feeds[inputNames[0]].dims[1] : Math.ceil(audio16k.length / 160);
+                    feeds[name] = new ortInstance.Tensor('int32', new Int32Array([seqLen]), [1]);
+                }
+                if (name.includes('language') || name.includes('lang')) {
+                    const langMap = { 'zh': 0, 'en': 1, 'ja': 2, 'ko': 3, 'yue': 4 };
+                    const langId = langMap[APP_STATE.currentLanguage] ?? 0;
+                    feeds[name] = new ortInstance.Tensor('int32', new Int32Array([langId]), [1]);
+                }
+                if (name.includes('textnorm') || name.includes('text_norm')) {
+                    feeds[name] = new ortInstance.Tensor('int32', new Int32Array([0]), [1]);
+                }
+            }
+
+            const results = await APP_STATE.asrModel.run(feeds);
+            console.log('ASR 输出:', outputNames, 'keys:', Object.keys(results));
+
+            const outputName = outputNames[0];
+            const outputData = results[outputName];
+            const text = decodeASROutput(outputData);
+            return text;
+        }
+
+        function decodeASROutput(outputTensor) {
+            const data = outputTensor.data;
+            const dims = outputTensor.dims || outputTensor.shape;
+
+            if (!data || data.length === 0) return '[空输出]';
+
+            // 整数 token ID
+            if (data instanceof BigInt64Array || data instanceof Int32Array) {
+                const tokenIds = Array.from(data).map(Number);
+                return decodeTokens(tokenIds);
+            }
+
+            // 浮点数 [batch, seq_len, vocab_size] -> CTC
+            if (data instanceof Float32Array && dims && dims.length === 3) {
+                return decodeCTC(data, dims);
+            }
+
+            // 浮点数 [batch, seq_len] -> 可能是 argmax 后的 ID
+            if (data instanceof Float32Array && dims && dims.length === 2) {
+                const tokenIds = Array.from(data).map(Math.round);
+                return decodeTokens(tokenIds);
+            }
+
+            // 其他格式，尝试作为字符串处理
+            if (typeof data === 'string') return data;
+
+            console.warn('未知输出格式:', dims, data.constructor.name);
+            return '[无法解码的输出格式]';
+        }
+
+        function decodeTokens(tokenIds) {
+            let text = '';
+            let prevToken = null;
+            for (const tokenId of tokenIds) {
+                // 跳过 blank/unk/special
+                if (tokenId < 0) { prevToken = tokenId; continue; }
+                // CTC 去重
+                if (tokenId === prevToken) continue;
+                if (APP_STATE.tokenMap && Object.keys(APP_STATE.tokenMap).length > 0) {
+                    const char = APP_STATE.tokenMap[tokenId] || APP_STATE.tokenMap[String(tokenId)];
+                    if (char && !char.startsWith('<')) text += char;
+                } else {
+                    // 回退：直接将 token ID 视为 Unicode 码点
+                    const char = String.fromCharCode(tokenId);
+                    if (char.trim()) text += char;
+                }
+                prevToken = tokenId;
+            }
+            return text.trim();
+        }
+
+        function decodeCTC(logitsData, dims) {
+            const [batch, seqLen, vocabSize] = dims;
+            let text = '';
+            let prevToken = -1;
+
+            for (let t = 0; t < seqLen; t++) {
+                const offset = t * vocabSize;
+                let maxProb = -Infinity, maxToken = -1;
+                for (let v = 0; v < vocabSize; v++) {
+                    const prob = logitsData[offset + v];
+                    if (prob > maxProb) { maxProb = prob; maxToken = v; }
+                }
+                if (maxToken !== 0 && maxToken !== prevToken) {
+                    const char = APP_STATE.tokenMap?.[maxToken] || APP_STATE.tokenMap?.[String(maxToken)] || String.fromCharCode(maxToken);
+                    if (char && !char.startsWith('<') && char.trim()) text += char;
+                }
+                prevToken = maxToken;
+            }
+            return text.trim();
+        }
+
+        // ==================== 会议记录管理 ====================
+        function addTranscriptEntry(startTime, duration, text) {
+            const timeStr = formatTime(startTime);
+            const entry = {
+                id: Date.now(),
+                time: timeStr,
+                startTime: startTime,
+                duration: duration,
+                speaker: '发言人',
+                text: text,
+            };
+            APP_STATE.segments.push(entry);
+            renderTranscriptEntry(entry);
+            updateSegmentCount();
+            if (transcriptPlaceholder) transcriptPlaceholder.style.display = 'none';
+        }
+
+        function renderTranscriptEntry(entry) {
+            const div = document.createElement('div');
+            div.className = 'transcript-entry';
+            div.innerHTML = `<span class="timestamp">${entry.time}</span><span class="speaker-tag">${entry.speaker}</span><span class="text">${escapeHTML(entry.text)}</span><span style="font-size:0.65rem;color:#b0b0b0;margin-left:6px;">(${entry.duration.toFixed(1)}s)</span>`;
+            transcriptContainer.appendChild(div);
+            transcriptContainer.scrollTop = transcriptContainer.scrollHeight;
+        }
+
+        function updateSegmentCount() { segmentCountEl.textContent = APP_STATE.segments.length + ' 个语音段'; }
+
+        function clearTranscript() {
+            APP_STATE.segments = [];
+            transcriptContainer.innerHTML = '';
+            if (transcriptPlaceholder) { transcriptContainer.appendChild(transcriptPlaceholder); transcriptPlaceholder.style.display = 'block'; }
+            updateSegmentCount();
+            showToast('会议记录已清空', 'info');
+        }
+
+        function exportTranscript() {
+            if (APP_STATE.segments.length === 0) { showToast('没有可导出的会议记录', 'warning'); return; }
+            let markdown = '# 会议纪要\n\n';
+            markdown += '> 生成时间: ' + new Date().toLocaleString() + '\n';
+            markdown += '> 语音段总数: ' + APP_STATE.segments.length + '\n\n---\n\n';
+            for (const entry of APP_STATE.segments) {
+                markdown += `**${entry.speaker}**  \`${entry.time}\` (${entry.duration.toFixed(1)}s)\n\n${entry.text}\n\n---\n\n`;
+            }
+            const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = '会议纪要_' + formatDate(new Date()) + '.md';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            showToast('会议纪要已导出！', 'success');
+        }
+
+        function copyTranscript() {
+            if (APP_STATE.segments.length === 0) { showToast('没有可复制的会议记录', 'warning'); return; }
+            let text = '会议纪要\n' + '='.repeat(40) + '\n\n';
+            for (const entry of APP_STATE.segments) { text += `[${entry.time}] ${entry.speaker}: ${entry.text}\n`; }
+            navigator.clipboard.writeText(text).then(() => { showToast('会议记录已复制到剪贴板！', 'success'); }).catch(() => { showToast('复制失败，请手动选择复制', 'warning'); });
+        }
+
+        // ==================== E2E Bridge ====================
+        window.bridgeGetState = function() {
+            const els = document.querySelectorAll('button, [role="button"], .btn');
+            const elements = [];
+            els.forEach((el, i) => {
+                const id = el.id || 'e' + i;
+                elements.push({ id: el.id || 'btn-' + i, tag: el.tagName.toLowerCase(), text: (el.textContent || '').trim().substring(0, 30), disabled: el.disabled || false, visible: el.offsetParent !== null, className: el.className });
+            });
+            return { url: window.location.href, title: document.title, isRecording: APP_STATE.isRecording, vadLoaded: APP_STATE.vadLoaded, asrLoaded: APP_STATE.asrLoaded, segments: APP_STATE.segments.length, elements };
+        };
+        window.bridgeClick = function(ref, duration) {
+            duration = duration || 1500;
+            let el = document.getElementById(ref);
+            if (!el) el = document.querySelector('[data-ref="' + ref + '"]');
+            if (!el) { const btns = document.querySelectorAll('button, .btn'); for (const b of btns) { if (b.textContent.trim().includes(ref.replace('btn-', ''))) { el = b; break; } } }
+            if (!el) return { success: false, error: 'Element not found: ' + ref };
+            el.click();
+            return { success: true, element: el.id || ref };
+        };
+        window.bridgeFill = function(ref, text) { let el = document.getElementById(ref); if (!el) return { success: false, error: 'Element not found: ' + ref }; el.value = text; el.dispatchEvent(new Event('input', { bubbles: true })); return { success: true }; };
+        window.bridgeHover = function(ref) { let el = document.getElementById(ref); if (!el) return { success: false, error: 'Element not found: ' + ref }; el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true })); return { success: true, elementInfo: { id: ref, tag: el.tagName } }; };
+
+        // ==================== 初始化 ====================
+        function init() {
+            updateButtonStates();
+            console.log('🚀 离线会议纪要应用已就绪');
+            console.log('📋 功能: Silero VAD 语音检测 + SenseVoiceSmall 语音识别');
+            console.log('🔒 所有处理均在浏览器本地完成，数据不会上传');
+            // 页面打开即自动加载模型
+            loadAllModels();
+        }
+
+        // 录音按钮切换逻辑：开始/停止切换显示
+        function toggleRecordingButtons(isRecording) {
+            btnStartRecord.style.display = isRecording ? 'none' : 'flex';
+            btnStopRecord.style.display = isRecording ? 'flex' : 'none';
+        }
+
+        window.addEventListener('beforeunload', () => { if (APP_STATE.isRecording) stopRecording(); });
+        function setASRModelUrl(url) { APP_STATE._asrModelUrl = url; console.log('ASR模型URL已设置为:', url); }
+        function setTokenMapUrl(url) { APP_STATE._tokenMapUrl = url; console.log('Token映射表URL已设置为:', url); }
+        window.setASRModelUrl = setASRModelUrl;
+        window.setTokenMapUrl = setTokenMapUrl;
+        window.APP_STATE = APP_STATE;
+        init();
+    </script>
+</body>
+</html>
