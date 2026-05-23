@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>离线会议纪要 - Silero VAD + SenseVoiceSmall</title>
+    <title>离线会议纪要</title>
     <style>
         :root {
             --bg: #0a0a0f;
@@ -494,7 +494,7 @@
         const APP_STATE = {
             vadModel: null,
             asrModel: null,
-            spkModel: null,       // CAM++ 音色识别模型
+            spkModel: null,       // 音色识别模型
             vadLoaded: false,
             asrLoaded: false,
             spkLoaded: false,
@@ -673,11 +673,11 @@
         // ==================== 模型加载 ====================
         async function loadVADModel() {
             try {
-                updateVADStatus('loading', 'Silero VAD: 加载中...');
-                showProgress('正在加载 Silero VAD 模型...');
-                updateProgress(10, '下载 Silero VAD ONNX 模型...');
+                updateVADStatus('loading', '人声识别: 加载中...');
+                showProgress('正在加载 人声识别 模型...');
+                updateProgress(10, '下载 人声识别 ONNX 模型...');
 
-                const vadModelUrl = './silero_vad.onnx';
+                const vadModelUrl = './models/silero_vad.onnx';
 
                 let modelBuffer;
                 const response = await fetch(vadModelUrl);
@@ -696,14 +696,14 @@
                 });
                 APP_STATE.vadLoaded = true;
                 updateProgress(100, 'VAD 模型就绪');
-                updateVADStatus('loaded', 'Silero VAD: ✅ 已就绪');
-                showToast('Silero VAD 模型加载成功！', 'success');
+                updateVADStatus('loaded', '人声识别: ✅ 已就绪');
+                showToast('人声识别 模型加载成功！', 'success');
                 hideProgress();
                 updateButtonStates();
             } catch (error) {
-                console.error('VAD模型加载失败:', error);
-                updateVADStatus('error', 'Silero VAD: ❌ 加载失败');
-                showToast('VAD模型加载失败: ' + error.message, 'warning');
+                console.error('人声识别模型加载失败:', error);
+                updateVADStatus('error', '人声识别: ❌ 加载失败');
+                showToast('人声识别模型加载失败: ' + error.message, 'warning');
                 hideProgress();
                 APP_STATE.vadLoaded = false;
             }
@@ -711,14 +711,14 @@
 
         async function loadASRModel() {
             try {
-                updateASRStatus('loading', 'SenseVoiceSmall: 加载中...');
-                showProgress('正在加载 SenseVoiceSmall 模型...');
-                updateProgress(5, '准备下载 SenseVoiceSmall ONNX 模型...');
+                updateASRStatus('loading', '文字识别: 加载中...');
+                showProgress('正在加载 文字识别 模型...');
+                updateProgress(5, '准备下载 文字识别 ONNX 模型...');
 
-                const MODEL_URL = './model_quant.onnx';
+                const MODEL_URL = './models/model_quant.onnx';
                 const asrModelUrl = APP_STATE._asrModelUrl || MODEL_URL;
 
-                updateProgress(10, '加载 SenseVoiceSmall 量化模型...');
+                updateProgress(10, '加载 文字识别 量化模型...');
 
                 let modelBuffer;
                 try {
@@ -727,7 +727,7 @@
                     modelBuffer = await response.arrayBuffer();
                 } catch (e) {
                     console.error('模型下载失败:', e);
-                    throw new Error('SenseVoiceSmall模型下载失败: ' + e.message);
+                    throw new Error('文字识别模型下载失败: ' + e.message);
                 }
 
                 updateProgress(75, '初始化 ONNX Runtime...');
@@ -742,8 +742,8 @@
 
                 const inputNames = APP_STATE.asrModel.inputNames;
                 const outputNames = APP_STATE.asrModel.outputNames;
-                console.log('SenseVoiceSmall 模型输入:', inputNames);
-                console.log('SenseVoiceSmall 模型输出:', outputNames);
+                console.log('文字识别 模型输入:', inputNames);
+                console.log('文字识别 模型输出:', outputNames);
 
                 if (inputNames.length > 0) APP_STATE.asrInputName = inputNames[0];
                 if (outputNames.length > 0) APP_STATE.asrOutputName = outputNames[0];
@@ -752,15 +752,15 @@
                 await loadTokenMap();
                 await loadCMVN();
 
-                updateProgress(100, 'SenseVoiceSmall 模型就绪');
-                updateASRStatus('loaded', 'SenseVoiceSmall: ✅ 已就绪');
-                showToast('SenseVoiceSmall 模型加载成功！', 'success');
+                updateProgress(100, '文字识别 模型就绪');
+                updateASRStatus('loaded', '文字识别: ✅ 已就绪');
+                showToast('文字识别 模型加载成功！', 'success');
                 hideProgress();
                 updateButtonStates();
             } catch (error) {
-                console.error('ASR模型加载失败:', error);
-                updateASRStatus('error', 'SenseVoiceSmall: ❌ 加载失败');
-                showToast('ASR模型加载失败: ' + error.message, 'warning');
+                console.error('文字识别模型加载失败:', error);
+                updateASRStatus('error', '文字识别: ❌ 加载失败');
+                showToast('文字识别模型加载失败: ' + error.message, 'warning');
                 hideProgress();
                 APP_STATE.asrLoaded = false;
             }
@@ -769,12 +769,12 @@
         async function loadSPKModel() {
             try {
                 updateSPKStatus('loading', '音色识别: 加载中...');
-                showProgress('正在加载 CAM++ 音色识别模型...');
-                updateProgress(10, '下载 CAM++ 模型...');
+                showProgress('正在加载 音色识别模型...');
+                updateProgress(10, '下载 音色识别 模型...');
 
-                const modelUrl = './campplus_cn.onnx';
+                const modelUrl = './models/campplus_cn.onnx';
                 const response = await fetch(modelUrl);
-                if (!response.ok) throw new Error('CAM++ model fetch failed');
+                if (!response.ok) throw new Error('音色识别 model fetch failed');
                 const modelBuffer = await response.arrayBuffer();
                 updateProgress(50, '模型下载完成');
 
@@ -789,7 +789,7 @@
                 APP_STATE.spkLoaded = true;
                 updateProgress(100, '音色识别就绪');
                 updateSPKStatus('loaded', '音色识别: ✅ 已就绪');
-                showToast('CAM++ 音色识别模型加载成功', 'success');
+                showToast('音色识别模型加载成功', 'success');
                 hideProgress();
                 updateButtonStates();
             } catch (error) {
@@ -803,15 +803,15 @@
 
         async function loadTokenMap() {
             try {
-                const tokenUrl = APP_STATE._tokenMapUrl || 'https://modelscope.cn/models/iic/SenseVoiceSmall-onnx/resolve/master/tokens.json';
+                const tokenUrl = APP_STATE._tokenMapUrl || './models/tokens.json';
                 const resp = await fetch(tokenUrl, { cache: 'force-cache', mode: 'cors' });
                 if (resp.ok) {
                     APP_STATE.tokenMap = await resp.json();
-                    console.log('Token映射表加载成功，共', Object.keys(APP_STATE.tokenMap).length, '个token');
+                    console.log('词汇映射表加载成功，共', Object.keys(APP_STATE.tokenMap).length, '个token');
                     return;
                 }
             } catch (e) {
-                console.warn('Token映射表加载失败，使用空映射:', e.message);
+                console.warn('词汇映射表加载失败，使用空映射:', e.message);
             }
             // 不使用假映射，直接使用空对象，decodeTokens 会回退到 fromCharCode
             APP_STATE.tokenMap = {};
@@ -872,7 +872,7 @@
                 }
 
                 const actualSampleRate = APP_STATE.audioContext.sampleRate;
-                console.log('AudioContext 采样率:', actualSampleRate);
+                console.log('音频采样率:', actualSampleRate);
                 APP_STATE._actualSampleRate = actualSampleRate;
 
                 const source = APP_STATE.audioContext.createMediaStreamSource(APP_STATE.mediaStream);
@@ -993,16 +993,22 @@
         async function runVADLoop() {
             if (!APP_STATE.isRecording) return;
 
-            if (APP_STATE.vadQueue.length > 0 && !APP_STATE.vadRunning) {
+            // 处理队列中的帧（不限制数量，尽可能处理）
+            while (APP_STATE.vadQueue.length > 0) {
+                if (APP_STATE.vadRunning) break; // 防止并发
                 APP_STATE.vadRunning = true;
                 const frame = APP_STATE.vadQueue.shift();
                 const speechProb = await runVADAsync(frame);
                 handleVADResult(speechProb, frame);
                 APP_STATE.vadRunning = false;
+                // 每 5 帧后 yield，避免阻塞
+                if (APP_STATE.vadQueue.length > 0 && APP_STATE.vadQueue.length % 5 === 0) {
+                    await yieldToMain();
+                }
             }
 
-            // 下一帧
-            requestAnimationFrame(() => runVADLoop());
+            // 使用 setTimeout 而不是 requestAnimationFrame，更容易被调度
+            setTimeout(() => runVADLoop(), 50);
         }
 
         async function runVADAsync(audioFrame) {
@@ -1080,13 +1086,15 @@
                 return;
             }
 
-            const segmentAudio = new Float32Array(
-                APP_STATE.audioBuffer.subarray(APP_STATE.segmentStartIdx, APP_STATE.segmentEndIdx)
-            );
+            // 复制语音段数据（独立副本，不依赖原缓冲区）
+            const segmentAudio = new Float32Array(segLen);
+            for (let i = 0; i < segLen; i++) {
+                segmentAudio[i] = APP_STATE.audioBuffer[APP_STATE.segmentStartIdx + i];
+            }
             const duration = segmentAudio.length / APP_STATE.sampleRate;
             const startTime = APP_STATE.currentSegmentStart || new Date();
 
-            console.log('语音段结束，时长:', duration.toFixed(2), '秒，样本数:', segmentAudio.length);
+            console.log('语音段结束，时长:', duration.toFixed(2), '秒，startIdx:', APP_STATE.segmentStartIdx);
 
             APP_STATE.processingQueue.push({
                 audio: segmentAudio,
@@ -1102,54 +1110,15 @@
             processQueue();
         }
 
-        // ==================== 说话人识别（CAM++ 音色聚类） ====================
-        function computeFBankForSpeaker(audioData, sampleRate) {
-            // 复用 ASR 的 FBank 提取逻辑，但独立实现避免耦合
-            const nFft = 512, hopLength = 160, winLength = 400, nMels = 80;
-            if (!APP_STATE._spkMelBuf) {
-                APP_STATE._spkMelBuf = createMelFilterbank(nFft, sampleRate, nMels);
-            }
-            const melFilterbank = APP_STATE._spkMelBuf;
-            const nFrames = Math.floor((audioData.length - nFft) / hopLength) + 1;
-            if (nFrames <= 0) return null;
-            const fbank = new Float32Array(nFrames * nMels);
-            if (!APP_STATE._hannWindow || APP_STATE._hannWindow.length !== winLength) {
-                APP_STATE._hannWindow = new Float32Array(nFft);
-                for (let i = 0; i < nFft; i++) {
-                    APP_STATE._hannWindow[i] = i < winLength ? 0.54 - 0.46 * Math.cos(2 * Math.PI * i / (winLength - 1)) : 0;
-                }
-            }
-            const hannWindow = APP_STATE._hannWindow;
-            const nFftBins = nFft / 2 + 1;
-            if (!APP_STATE._frameBuf || APP_STATE._frameBuf.length !== nFft) {
-                APP_STATE._frameBuf = new Float32Array(nFft);
-            }
-            const frameBuf = APP_STATE._frameBuf;
-            for (let frame = 0; frame < nFrames; frame++) {
-                const start = frame * hopLength;
-                for (let i = 0; i < nFft; i++) frameBuf[i] = (audioData[start + i] || 0) * hannWindow[i];
-                const magnitude = computeRealFFT(frameBuf, nFft);
-                const offset = frame * nMels;
-                for (let m = 0; m < nMels; m++) {
-                    let sum = 0;
-                    const fb = melFilterbank[m];
-                    for (let j = 0; j < fb.weights.length; j++) {
-                        const bin = fb.startBin + j;
-                        if (bin < nFftBins) sum += fb.weights[j] * magnitude[bin] * magnitude[bin];
-                    }
-                    fbank[offset + m] = Math.log(Math.max(sum, 1e-10));
-                }
-            }
-            return { data: fbank, nFrames, nMels };
-        }
-
+        // ==================== 说话人识别（音色识别聚类） ====================
         async function identifySpeaker(audioData, sampleRate) {
             if (!APP_STATE.spkLoaded || !APP_STATE.spkModel) return null;
             try {
                 const ortInstance = getOrt();
-                const fbank = computeFBankForSpeaker(audioData, sampleRate);
+                // 使用分片 FBank 计算，避免阻塞
+                const fbank = await computeFBankChunked(audioData, sampleRate);
                 if (!fbank || fbank.nFrames < 1) return null;
-                // CAM++ 输入: [batch, frame_num, 80]
+                // 音色识别 输入: [batch, frame_num, 80]
                 const inputTensor = new ortInstance.Tensor('float32', fbank.data, [1, fbank.nFrames, 80]);
                 const results = await APP_STATE.spkModel.run({ feature: inputTensor });
                 const embedding = results.embedding.data; // [1, 192]
@@ -1208,37 +1177,40 @@
             if (APP_STATE.isProcessing || APP_STATE.processingQueue.length === 0) return;
             if (!APP_STATE.asrLoaded) {
                 const segment = APP_STATE.processingQueue.shift();
-                addTranscriptEntry(segment.startTime, segment.duration, '[语音段 ' + segment.duration.toFixed(1) + '秒 - ASR模型未加载]', null);
-                processQueue();
+                addTranscriptEntry(segment.startTime, segment.duration, '[语音段 ' + segment.duration.toFixed(1) + '秒 - 文字识别模型未加载]', null);
+                setTimeout(() => processQueue(), 0);
                 return;
             }
 
             APP_STATE.isProcessing = true;
             const segment = APP_STATE.processingQueue.shift();
 
-            try {
-                updateRecordingStatus('processing', '识别中...');
-                const [text, speaker] = await Promise.all([
-                    runASR(segment.audio, segment.sampleRate),
-                    identifySpeaker(segment.audio, segment.sampleRate),
-                ]);
-                addTranscriptEntry(segment.startTime, segment.duration, text || '[无识别结果]', speaker);
-                updateRecordingStatus(APP_STATE.isRecording ? 'active' : 'idle', APP_STATE.isRecording ? '录音中' : '已停止');
-            } catch (error) {
-                console.error('ASR识别错误:', error);
-                addTranscriptEntry(segment.startTime, segment.duration, '[识别失败: ' + error.message + ']', null);
-                updateRecordingStatus(APP_STATE.isRecording ? 'active' : 'idle', APP_STATE.isRecording ? '录音中' : '已停止');
-            }
+            // 使用 setTimeout 让 VAD 循环有机会执行，避免阻塞
+            setTimeout(async () => {
+                try {
+                    updateRecordingStatus('processing', '识别中...');
+                    const [text, speaker] = await Promise.all([
+                        runASR(segment.audio, segment.sampleRate),
+                        identifySpeaker(segment.audio, segment.sampleRate),
+                    ]);
+                    addTranscriptEntry(segment.startTime, segment.duration, text || '[无识别结果]', speaker);
+                    updateRecordingStatus(APP_STATE.isRecording ? 'active' : 'idle', APP_STATE.isRecording ? '录音中' : '已停止');
+                } catch (error) {
+                    console.error('ASR识别错误:', error);
+                    addTranscriptEntry(segment.startTime, segment.duration, '[识别失败: ' + error.message + ']', null);
+                    updateRecordingStatus(APP_STATE.isRecording ? 'active' : 'idle', APP_STATE.isRecording ? '录音中' : '已停止');
+                }
 
-            APP_STATE.isProcessing = false;
-            if (APP_STATE.processingQueue.length > 0) {
-                setTimeout(() => processQueue(), 100);
-            }
+                APP_STATE.isProcessing = false;
+                if (APP_STATE.processingQueue.length > 0) {
+                    setTimeout(() => processQueue(), 0);
+                }
+            }, 0);
         }
 
         // ==================== FBank 特征提取 ====================
         function computeFBank(audioData, sampleRate) {
-            const nFft = 512; // 修正：SenseVoiceSmall 使用 n_fft=512
+            const nFft = 512; // 修正：文字识别 使用 n_fft=512
             const hopLength = 160;
             const winLength = 400;
             const nMels = 80;
@@ -1379,19 +1351,28 @@
 
         async function loadCMVN() {
             try {
-                const response = await fetch('https://modelscope.cn/models/iic/SenseVoiceSmall-onnx/resolve/master/am.mvn', { cache: 'force-cache', mode: 'cors' });
+                const response = await fetch('./models/am.mvn', { cache: 'force-cache' });
                 if (response.ok) {
-                    const data = await response.json();
-                    APP_STATE.cmvnMean = data.mean || data.global_cmvn_mean;
-                    APP_STATE.cmvnVar = data.var || data.global_cmvn_var;
-                    console.log('CMVN 参数已加载');
-                    return;
+                    const text = await response.text();
+                    // 解析 Kaldi 格式: <AddShift> 后是 mean，<Rescale> 后是 var
+                    const meanMatch = text.match(/<AddShift>[\s\S]*?\[\s*([^\]]+)\]/);
+                    const varMatch = text.match(/<Rescale>[\s\S]*?\[\s*([^\]]+)\]/);
+                    if (meanMatch && varMatch) {
+                        const meanValues = meanMatch[1].trim().split(/\s+/).map(parseFloat);
+                        const varValues = varMatch[1].trim().split(/\s+/).map(parseFloat);
+                        // 取前 80 维（基础 FBank 维度）
+                        APP_STATE.cmvnMean = new Float32Array(meanValues.slice(0, 80));
+                        APP_STATE.cmvnVar = new Float32Array(varValues.slice(0, 80));
+                        console.log('CMVN 参数已加载，维度:', APP_STATE.cmvnMean.length);
+                        return;
+                    }
                 }
             } catch (e) {
                 console.warn('CMVN 加载失败，使用默认值:', e.message);
             }
-            APP_STATE.cmvnMean = new Float32Array(80).fill(-1.6);
-            APP_STATE.cmvnVar = new Float32Array(80).fill(1.0);
+            // 默认值（基于统计数据估算）
+            APP_STATE.cmvnMean = new Float32Array(80).fill(-12);
+            APP_STATE.cmvnVar = new Float32Array(80).fill(0.15);
         }
 
         function applyCMVN(fbankData, nFrames, nMels) {
@@ -1407,7 +1388,7 @@
             return normalized;
         }
 
-        // SenseVoiceSmall 需要 560 维输入 = 80维FBank * 7帧上下文
+        // 文字识别 需要 560 维输入 = 80维FBank * 7帧上下文
         function expandFBankTo560(fbankData, nFrames, nMels) {
             const ctxSize = 7; // 7帧上下文
             const featDim = 560; // 80 * 7
@@ -1425,9 +1406,59 @@
             return output;
         }
 
-        // ==================== SenseVoiceSmall ASR ====================
+        // ==================== 文字识别 ASR ====================
+        // Yield 函数：让其他任务有机会执行
+        function yieldToMain() {
+            return new Promise(r => setTimeout(r, 0));
+        }
+
+        // 分片 FBank 计算，避免阻塞主线程
+        async function computeFBankChunked(audioData, sampleRate) {
+            const nFft = 512, hopLength = 160, winLength = 400, nMels = 80;
+            const nFrames = Math.floor((audioData.length - nFft) / hopLength) + 1;
+            if (nFrames <= 0) return null;
+
+            if (!APP_STATE._melFilterbank) {
+                APP_STATE._melFilterbank = createMelFilterbank(nFft, sampleRate, nMels);
+            }
+            // 使用局部 hann 窗，避免共享变量问题
+            const hannWindow = new Float32Array(nFft);
+            for (let i = 0; i < nFft; i++) {
+                hannWindow[i] = i < winLength ? 0.54 - 0.46 * Math.cos(2 * Math.PI * i / (winLength - 1)) : 0;
+            }
+
+            const fbank = new Float32Array(nFrames * nMels);
+            const chunkSize = 200; // 增加批次大小，减少 yield 频率
+            const melFilterbank = APP_STATE._melFilterbank;
+            const nFftBins = nFft / 2 + 1;
+            const localFrameBuf = new Float32Array(nFft); // 局部缓冲区，避免共享
+
+            for (let chunkStart = 0; chunkStart < nFrames; chunkStart += chunkSize) {
+                const chunkEnd = Math.min(chunkStart + chunkSize, nFrames);
+                for (let frame = chunkStart; frame < chunkEnd; frame++) {
+                    const start = frame * hopLength;
+                    // 使用局部帧缓冲区
+                    for (let i = 0; i < nFft; i++) localFrameBuf[i] = (audioData[start + i] || 0) * hannWindow[i];
+                    const magnitude = computeRealFFT(localFrameBuf, nFft);
+                    const offset = frame * nMels;
+                    for (let m = 0; m < nMels; m++) {
+                        let sum = 0;
+                        const fb = melFilterbank[m];
+                        for (let j = 0; j < fb.weights.length; j++) {
+                            const bin = fb.startBin + j;
+                            if (bin < nFftBins) sum += fb.weights[j] * magnitude[bin] * magnitude[bin];
+                        }
+                        fbank[offset + m] = Math.log(Math.max(sum, 1e-10));
+                    }
+                }
+                // 每处理一批后 yield
+                await yieldToMain();
+            }
+            return { data: fbank, nFrames, nMels };
+        }
+
         async function runASR(audioData, sampleRate) {
-            if (!APP_STATE.asrLoaded || !APP_STATE.asrModel) throw new Error('ASR模型未加载');
+            if (!APP_STATE.asrLoaded || !APP_STATE.asrModel) throw new Error('文字识别模型未加载');
 
             let audio16k = audioData;
             if (sampleRate !== 16000) {
@@ -1438,25 +1469,18 @@
             const inputNames = APP_STATE.asrModel.inputNames;
             const outputNames = APP_STATE.asrModel.outputNames;
 
-            console.log('ASR 模型输入:', inputNames);
-            console.log('ASR 模型输出:', outputNames);
-
             const feeds = {};
             let useFBank = true;
             const primaryInput = inputNames[0];
 
-            // SenseVoiceSmall 通常使用 FBank 特征
-            // 检测输入名：speech 或 feats -> FBank, waveform -> 原始波形
             if (primaryInput.includes('waveform') || primaryInput.includes('wav')) {
                 useFBank = false;
-                console.log('模型接受原始波形输入');
                 feeds[primaryInput] = new ortInstance.Tensor('float32', new Float32Array(audio16k), [1, audio16k.length]);
             } else {
-                console.log('模型需要 FBank 特征输入 (560维)');
-                const fbank = computeFBank(audio16k, 16000);
+                // 使用分片 FBank 计算，避免阻塞
+                const fbank = await computeFBankChunked(audio16k, 16000);
                 if (!fbank || fbank.nFrames <= 0) return '[音频太短，无法识别]';
                 const normalized = applyCMVN(fbank.data, fbank.nFrames, fbank.nMels);
-                // SenseVoiceSmall 期望 560 维输入 (80 * 7帧上下文拼接)
                 const speech560 = expandFBankTo560(normalized, fbank.nFrames, fbank.nMels);
                 feeds[primaryInput] = new ortInstance.Tensor('float32', speech560, [1, fbank.nFrames, 560]);
             }
@@ -1479,7 +1503,7 @@
             }
 
             const results = await APP_STATE.asrModel.run(feeds);
-            console.log('ASR 输出:', outputNames, 'keys:', Object.keys(results));
+            console.log('文字识别输出:', outputNames, 'keys:', Object.keys(results));
 
             const outputName = outputNames[0];
             const outputData = results[outputName];
@@ -1653,7 +1677,7 @@
         function init() {
             updateButtonStates();
             console.log('🚀 离线会议纪要应用已就绪');
-            console.log('📋 功能: Silero VAD 语音检测 + SenseVoiceSmall 语音识别');
+            console.log('📋 功能: 人声识别 语音检测 + 文字识别 语音识别');
             console.log('🔒 所有处理均在浏览器本地完成，数据不会上传');
             // 页面打开即自动加载模型
             loadAllModels();
@@ -1666,8 +1690,8 @@
         }
 
         window.addEventListener('beforeunload', () => { if (APP_STATE.isRecording) stopRecording(); });
-        function setASRModelUrl(url) { APP_STATE._asrModelUrl = url; console.log('ASR模型URL已设置为:', url); }
-        function setTokenMapUrl(url) { APP_STATE._tokenMapUrl = url; console.log('Token映射表URL已设置为:', url); }
+        function setASRModelUrl(url) { APP_STATE._asrModelUrl = url; console.log('文字识别模型URL已设置为:', url); }
+        function setTokenMapUrl(url) { APP_STATE._tokenMapUrl = url; console.log('词汇映射表URL已设置为:', url); }
         window.setASRModelUrl = setASRModelUrl;
         window.setTokenMapUrl = setTokenMapUrl;
         window.APP_STATE = APP_STATE;
