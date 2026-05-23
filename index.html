@@ -511,7 +511,7 @@
             vadFrameSize: 512,
             vadThreshold: 0.5,
             vadSilenceFrames: 0,
-            vadSilenceThreshold: 15,
+            vadSilenceThreshold: 8,
             isSpeaking: false,
             segments: [],
             currentSegmentStart: null,
@@ -659,7 +659,7 @@
         }
 
         function drainVadBuf(count) {
-            const out = APP_STATE.vadBuffer.subarray(APP_STATE.vadBufferPos, APP_STATE.vadBufferPos + count);
+            const out = APP_STATE.vadBuffer.slice(APP_STATE.vadBufferPos, APP_STATE.vadBufferPos + count);
             APP_STATE.vadBufferPos += count;
             APP_STATE.vadBufferLen -= count;
             // 当读取位置超过缓冲区一半时，压缩数据
@@ -689,6 +689,7 @@
                 const ortInstance = getOrt();
                 // 配置 WASM 路径
                 ortInstance.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
+                ortInstance.env.wasm.proxy = true;
 
                 APP_STATE.vadModel = await ortInstance.InferenceSession.create(modelBuffer, {
                     graphOptimizationLevel: 'all',
@@ -733,6 +734,8 @@
                 updateProgress(75, '初始化 ONNX Runtime...');
                 const ortInstance = getOrt();
                 ortInstance.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
+                // 开启 proxy 模式：WASM 推理在 Web Worker 中执行，不阻塞主线程
+                ortInstance.env.wasm.proxy = true;
 
                 APP_STATE.asrModel = await ortInstance.InferenceSession.create(modelBuffer, {
                     graphOptimizationLevel: 'all',
@@ -781,6 +784,7 @@
                 updateProgress(60, '初始化 ONNX Runtime...');
                 const ortInstance = getOrt();
                 ortInstance.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
+                ortInstance.env.wasm.proxy = true;
 
                 APP_STATE.spkModel = await ortInstance.InferenceSession.create(modelBuffer, {
                     graphOptimizationLevel: 'all',
@@ -1185,14 +1189,13 @@
             APP_STATE.isProcessing = true;
             const segment = APP_STATE.processingQueue.shift();
 
-            // 使用 setTimeout 让 VAD 循环有机会执行，避免阻塞
+            // 使用 setTimeout 让 VAD 循环有机会执行
             setTimeout(async () => {
                 try {
                     updateRecordingStatus('processing', '识别中...');
-                    const [text, speaker] = await Promise.all([
-                        runASR(segment.audio, segment.sampleRate),
-                        identifySpeaker(segment.audio, segment.sampleRate),
-                    ]);
+                    // 串行执行：先 ASR 识别，再说话人识别，避免同时传输大量音频数据
+                    const text = await runASR(segment.audio, segment.sampleRate);
+                    const speaker = await identifySpeaker(segment.audio, segment.sampleRate);
                     addTranscriptEntry(segment.startTime, segment.duration, text || '[无识别结果]', speaker);
                     updateRecordingStatus(APP_STATE.isRecording ? 'active' : 'idle', APP_STATE.isRecording ? '录音中' : '已停止');
                 } catch (error) {
