@@ -17,7 +17,7 @@
             --accent-glow: rgba(139, 92, 246, 0.4);
             --accent-secondary: #06b6d4;
             --danger: #f43f5e;
-            --success: #22c55e;
+            --success: #6f947a;
             --warning: #f59e0b;
             --radius: 16px;
             --radius-sm: 10px;
@@ -174,7 +174,7 @@
             border-radius: 50%;
             display: inline-block;
         }
-        .status-dot.green { background: var(--success); box-shadow: 0 0 8px var(--success); }
+        .status-dot.green { background: var(--success); box-shadow: none; }
         .status-dot.yellow { background: var(--warning); box-shadow: 0 0 8px var(--warning); }
         .status-dot.red { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
         .status-dot.gray { background: var(--text-muted); }
@@ -406,7 +406,7 @@
             pointer-events: none;
         }
         .toast.info { background: rgba(24, 24, 27, 0.9); color: var(--text); border: 1px solid var(--border); }
-        .toast.success { background: rgba(22, 101, 52, 0.9); color: #fff; border: 1px solid rgba(34, 197, 94, 0.3); }
+        .toast.success { background: rgba(53, 79, 60, 0.92); color: #f4f6f4; border: 1px solid rgba(111, 148, 122, 0.35); }
         .toast.warning { background: rgba(146, 64, 14, 0.9); color: #fff; border: 1px solid rgba(245, 158, 11, 0.3); }
         @keyframes slideUp {
             from { opacity: 0; transform: translateX(-50%) translateY(24px); }
@@ -471,9 +471,9 @@
                 <span class="card-title">会议记录</span>
                 <div>
                     <span style="font-size:0.75rem;color:var(--text-muted);" id="segmentCount">0 个语音段</span>
-                    <button class="btn btn-ghost btn-sm" style="margin-left:8px;" onclick="exportTranscript()">导出</button>
-                    <button class="btn btn-ghost btn-sm" style="margin-left:4px;" onclick="copyTranscript()">复制</button>
-                    <button class="btn btn-ghost btn-sm" style="margin-left:4px;" onclick="clearTranscript()">清空</button>
+                    <button class="btn btn-ghost btn-sm" id="btnExportTranscript" style="margin-left:8px;" onclick="exportTranscript()">导出</button>
+                    <button class="btn btn-ghost btn-sm" id="btnCopyTranscript" style="margin-left:4px;" onclick="copyTranscript()">复制</button>
+                    <button class="btn btn-ghost btn-sm" id="btnClearTranscript" style="margin-left:4px;" onclick="clearTranscript()">清空</button>
                 </div>
             </div>
             <div class="transcript-container" id="transcriptContainer">
@@ -487,10 +487,13 @@
     <div class="toast info" id="toast" style="display:none;"></div>
 
     <!-- ONNX Runtime Web -->
-    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/ort.min.js"></script>
+    <script src="./vendor/onnxruntime-web/ort.min.js"></script>
 
     <script>
         // ==================== 全局状态 ====================
+        const E2E_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+        const E2E_MODE = E2E_HOSTS.has(window.location.hostname) && new URLSearchParams(window.location.search).has('e2e');
+
         const APP_STATE = {
             vadModel: null,
             asrModel: null,
@@ -509,16 +512,32 @@
             vadBufferLen: 0,
             vadBufferPos: 0,
             vadFrameSize: 512,
-            vadThreshold: 0.5,
+            vadStartThreshold: 0.60,
+            vadContinueThreshold: 0.35,
+            vadStartSpeechFrames: 2,
             vadSilenceFrames: 0,
-            vadSilenceThreshold: 8,
+            vadSilenceThreshold: 16,
+            vadPreRollSamples: 16000 * 0.32,
+            vadPostRollSamples: 16000 * 0.16,
+            vadMaxSegmentSamples: 16000 * 15,
+            vadMaxQueueFrames: 250,
+            vadSpeechFrames: 0,
+            vadCandidateStartIdx: 0,
+            vadLastSpeechEndIdx: 0,
+            vadOverrun: false,
             isSpeaking: false,
+            isStopping: false,
+            recordingSessionId: 0,
+            recordingStartedAtMs: 0,
             segments: [],
             currentSegmentStart: null,
             segmentStartIdx: 0,
             segmentEndIdx: 0,
-            vadH: null,
-            vadC: null,
+            audioBufferBaseIdx: 0,
+            totalAudioSamples: 0,
+            vadState: null,
+            vadContext: null,
+            inputResampler: null,
             cmvnMean: null,
             cmvnVar: null,
             tokenMap: null,
@@ -529,6 +548,8 @@
             // VAD 推理队列
             vadQueue: [],
             vadRunning: false,
+            processedVadSamples: 0,
+            vadQueueHighWaterMark: 0,
             // 预分配重用缓冲区
             _frameBuf: null,
             _hannWindow: null,
@@ -539,6 +560,13 @@
             speakerThreshold: 0.65, // 余弦相似度阈值
             _spkMelBuf: null,     // 说话人识别专用 FBank 重用缓冲
         };
+
+        const SILERO_VAD_VERSION = 'v6.2.1';
+        const SILERO_VAD_SHA256 = '1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3';
+        const SILERO_VAD_INPUT_SAMPLES = 576;
+        const SILERO_VAD_CONTEXT_SAMPLES = 64;
+        const SILERO_VAD_STATE_SIZE = 256;
+        const ORT_WASM_PATH = new URL('./vendor/onnxruntime-web/', window.location.href).href;
 
         // ==================== DOM 元素缓存 ====================
         const $ = (id) => document.getElementById(id);
@@ -563,7 +591,7 @@
         // ==================== 工具函数 ====================
         function getOrt() {
             if (typeof ort !== 'undefined') return ort;
-            throw new Error('ONNX Runtime 未加载，请检查网络后刷新页面');
+            throw new Error('本地 ONNX Runtime 未加载，请检查 vendor/onnxruntime-web 资产');
         }
 
         function showToast(message, type = 'info') {
@@ -606,27 +634,71 @@
             return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         }
 
-        // ==================== 重采样（带简单低通滤波） ====================
-        function resampleAudio(inputData, fromRate, toRate) {
-            const ratio = fromRate / toRate;
-            const outputLength = Math.floor(inputData.length / ratio);
-            const output = new Float32Array(outputLength);
-            // 简单移动平均低通滤波
-            const filterLen = Math.max(1, Math.floor(ratio));
-            for (let i = 0; i < outputLength; i++) {
-                let sum = 0;
-                let count = 0;
-                const center = i * ratio;
-                for (let j = -filterLen; j <= filterLen; j++) {
-                    const idx = Math.round(center + j);
-                    if (idx >= 0 && idx < inputData.length) {
-                        sum += inputData[idx];
-                        count++;
-                    }
-                }
-                output[i] = count > 0 ? sum / count : 0;
+        // ==================== 连续重采样 ====================
+        class StreamingResampler {
+            constructor(fromRate, toRate) {
+                this.fromRate = fromRate;
+                this.toRate = toRate;
+                this.step = fromRate / toRate;
+                this.nextInputPos = 0;
+                this.inputBaseIndex = 0;
+                this.buffer = new Float32Array(0);
             }
-            return output;
+
+            process(inputData) {
+                if (!inputData.length) return new Float32Array(0);
+                if (this.fromRate === this.toRate) return new Float32Array(inputData);
+
+                const previous = this.buffer;
+                const merged = new Float32Array(previous.length + inputData.length);
+                merged.set(previous);
+                merged.set(inputData, previous.length);
+
+                const availableEnd = this.inputBaseIndex + merged.length - 1;
+                const output = [];
+                while (this.nextInputPos + 1 <= availableEnd) {
+                    const relativePos = this.nextInputPos - this.inputBaseIndex;
+                    const left = Math.floor(relativePos);
+                    const fraction = relativePos - left;
+                    const sample = merged[left] + (merged[left + 1] - merged[left]) * fraction;
+                    output.push(sample);
+                    this.nextInputPos += this.step;
+                }
+
+                const keepFrom = Math.min(
+                    Math.max(0, merged.length - 1),
+                    Math.max(0, Math.floor(this.nextInputPos) - this.inputBaseIndex)
+                );
+                this.buffer = merged.slice(keepFrom);
+                this.inputBaseIndex += keepFrom;
+                return Float32Array.from(output);
+            }
+
+            flush() {
+                if (!this.buffer.length || this.fromRate === this.toRate) {
+                    this.buffer = new Float32Array(0);
+                    return new Float32Array(0);
+                }
+
+                const availableEnd = this.inputBaseIndex + this.buffer.length - 1;
+                const output = [];
+                while (this.nextInputPos <= availableEnd) {
+                    const relativePos = this.nextInputPos - this.inputBaseIndex;
+                    const left = Math.min(this.buffer.length - 1, Math.floor(relativePos));
+                    const fraction = relativePos - Math.floor(relativePos);
+                    const right = Math.min(this.buffer.length - 1, left + 1);
+                    output.push(this.buffer[left] + (this.buffer[right] - this.buffer[left]) * fraction);
+                    this.nextInputPos += this.step;
+                }
+
+                this.buffer = new Float32Array(0);
+                return Float32Array.from(output);
+            }
+        }
+
+        function resampleAudio(inputData, fromRate, toRate) {
+            if (fromRate === toRate) return new Float32Array(inputData);
+            return new StreamingResampler(fromRate, toRate).process(inputData);
         }
 
         // ==================== 音频缓冲区管理（Float32Array） ====================
@@ -639,22 +711,47 @@
         }
 
         function pushToAudioBuf(data) {
-            APP_STATE.audioBuffer = ensureAudioBufCapacity(APP_STATE.audioBuffer, APP_STATE.audioBufferLen + data.length, 1.5);
+            APP_STATE.audioBuffer = ensureAudioBufCapacity(
+                APP_STATE.audioBuffer,
+                APP_STATE.audioBufferLen + data.length,
+                1.5
+            );
             APP_STATE.audioBuffer.set(data, APP_STATE.audioBufferLen);
             APP_STATE.audioBufferLen += data.length;
         }
 
-        function drainAudioBuf(count) {
-            const out = APP_STATE.audioBuffer.subarray(0, count);
+        function trimAudioBufferBefore(absoluteSample) {
+            const trimTo = Math.max(
+                APP_STATE.audioBufferBaseIdx,
+                Math.min(
+                    absoluteSample,
+                    APP_STATE.audioBufferBaseIdx + APP_STATE.audioBufferLen
+                )
+            );
+            const count = trimTo - APP_STATE.audioBufferBaseIdx;
+            if (!count) return;
             APP_STATE.audioBuffer.copyWithin(0, count, APP_STATE.audioBufferLen);
             APP_STATE.audioBufferLen -= count;
-            return out;
+            APP_STATE.audioBufferBaseIdx = trimTo;
+        }
+
+        function trimAudioBufferAtSafeBoundary() {
+            if (APP_STATE.isSpeaking) return;
+            const segmentCandidateStart = APP_STATE.vadSpeechFrames
+                ? APP_STATE.vadCandidateStartIdx
+                : APP_STATE.processedVadSamples;
+            const preserveFrom = Math.max(
+                0,
+                segmentCandidateStart - APP_STATE.vadPreRollSamples
+            );
+            trimAudioBufferBefore(preserveFrom);
         }
 
         function pushToVadBuf(data) {
-            const needed = APP_STATE.vadBufferLen + data.length;
+            const writePos = APP_STATE.vadBufferPos + APP_STATE.vadBufferLen;
+            const needed = writePos + data.length;
             APP_STATE.vadBuffer = ensureAudioBufCapacity(APP_STATE.vadBuffer, needed, 2);
-            APP_STATE.vadBuffer.set(data, APP_STATE.vadBufferPos);
+            APP_STATE.vadBuffer.set(data, writePos);
             APP_STATE.vadBufferLen += data.length;
         }
 
@@ -671,6 +768,27 @@
         }
 
         // ==================== 模型加载 ====================
+
+        async function sha256Hex(buffer) {
+            const digest = await crypto.subtle.digest('SHA-256', buffer);
+            return Array.from(new Uint8Array(digest), byte =>
+                byte.toString(16).padStart(2, '0')
+            ).join('');
+        }
+
+        function validateSileroV621Contract(model) {
+            const expectedInputs = ['input', 'state', 'sr'];
+            const expectedOutputs = ['output', 'stateN'];
+            const missingInputs = expectedInputs.filter(name => !model.inputNames.includes(name));
+            const missingOutputs = expectedOutputs.filter(name => !model.outputNames.includes(name));
+            if (missingInputs.length || missingOutputs.length) {
+                throw new Error(
+                    'Silero ' + SILERO_VAD_VERSION + ' 模型接口不匹配: 输入[' +
+                    model.inputNames.join(', ') + '] 输出[' + model.outputNames.join(', ') + ']'
+                );
+            }
+        }
+
         async function loadVADModel() {
             try {
                 updateVADStatus('loading', '人声识别: 加载中...');
@@ -679,26 +797,30 @@
 
                 const vadModelUrl = './models/silero_vad.onnx';
 
-                let modelBuffer;
                 const response = await fetch(vadModelUrl);
                 if (!response.ok) throw new Error('VAD model fetch failed');
-                modelBuffer = await response.arrayBuffer();
-                updateProgress(50, 'VAD 模型加载完成');
+                const modelBuffer = await response.arrayBuffer();
+                const modelHash = await sha256Hex(modelBuffer);
+                if (modelHash !== SILERO_VAD_SHA256) {
+                    throw new Error(
+                        'Silero VAD 模型校验失败，期望 ' +
+                        SILERO_VAD_VERSION + ' (' + SILERO_VAD_SHA256.slice(0, 12) + '...)'
+                    );
+                }
+                updateProgress(50, 'Silero ' + SILERO_VAD_VERSION + ' 模型校验完成');
 
                 updateProgress(60, '初始化 ONNX Runtime...');
                 const ortInstance = getOrt();
-                // 配置 WASM 路径
-                ortInstance.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
-                ortInstance.env.wasm.proxy = true;
 
                 APP_STATE.vadModel = await ortInstance.InferenceSession.create(modelBuffer, {
                     graphOptimizationLevel: 'all',
-                    executionMode: 'parallel',
+                    executionMode: 'sequential',
                 });
+                validateSileroV621Contract(APP_STATE.vadModel);
                 APP_STATE.vadLoaded = true;
-                updateProgress(100, 'VAD 模型就绪');
-                updateVADStatus('loaded', '人声识别: ✅ 已就绪');
-                showToast('人声识别 模型加载成功！', 'success');
+                updateProgress(100, 'Silero ' + SILERO_VAD_VERSION + ' 已就绪');
+                updateVADStatus('loaded', '人声识别: ✅ Silero ' + SILERO_VAD_VERSION);
+                showToast('Silero ' + SILERO_VAD_VERSION + ' 模型加载成功！', 'success');
                 hideProgress();
                 updateButtonStates();
             } catch (error) {
@@ -733,13 +855,10 @@
 
                 updateProgress(75, '初始化 ONNX Runtime...');
                 const ortInstance = getOrt();
-                ortInstance.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
-                // 开启 proxy 模式：WASM 推理在 Web Worker 中执行，不阻塞主线程
-                ortInstance.env.wasm.proxy = true;
 
                 APP_STATE.asrModel = await ortInstance.InferenceSession.create(modelBuffer, {
                     graphOptimizationLevel: 'all',
-                    executionMode: 'parallel',
+                    executionMode: 'sequential',
                 });
                 APP_STATE.asrLoaded = true;
 
@@ -783,12 +902,10 @@
 
                 updateProgress(60, '初始化 ONNX Runtime...');
                 const ortInstance = getOrt();
-                ortInstance.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
-                ortInstance.env.wasm.proxy = true;
 
                 APP_STATE.spkModel = await ortInstance.InferenceSession.create(modelBuffer, {
                     graphOptimizationLevel: 'all',
-                    executionMode: 'parallel',
+                    executionMode: 'sequential',
                 });
                 APP_STATE.spkLoaded = true;
                 updateProgress(100, '音色识别就绪');
@@ -822,6 +939,11 @@
         }
 
         async function loadAllModels() {
+            const ortInstance = getOrt();
+            ortInstance.env.wasm.wasmPaths = ORT_WASM_PATH;
+            ortInstance.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(2, navigator.hardwareConcurrency || 1) : 1;
+            ortInstance.env.wasm.proxy = true;
+
             const promises = [];
             if (!APP_STATE.vadLoaded) promises.push(loadVADModel());
             if (!APP_STATE.spkLoaded) promises.push(loadSPKModel());
@@ -855,19 +977,57 @@
         }
 
         function updateButtonStates() {
-            const canRecord = APP_STATE.vadLoaded && APP_STATE.spkLoaded;
+            const canRecord = APP_STATE.vadLoaded && APP_STATE.asrLoaded && APP_STATE.spkLoaded;
             btnStartRecord.disabled = !canRecord || APP_STATE.isRecording;
             btnStopRecord.disabled = !APP_STATE.isRecording;
         }
 
-        // ==================== 音频捕获 ====================
+        // ==================== 音频采集与 VAD ====================
+        function resetRecordingSession(actualSampleRate) {
+            APP_STATE.audioBuffer = new Float32Array(16000 * 30);
+            APP_STATE.audioBufferLen = 0;
+            APP_STATE.audioBufferBaseIdx = 0;
+            APP_STATE.totalAudioSamples = 0;
+            APP_STATE.vadBuffer = new Float32Array(16000 * 5);
+            APP_STATE.vadBufferLen = 0;
+            APP_STATE.vadBufferPos = 0;
+            APP_STATE.vadSpeechFrames = 0;
+            APP_STATE.vadCandidateStartIdx = 0;
+            APP_STATE.vadLastSpeechEndIdx = 0;
+            APP_STATE.vadSilenceFrames = 0;
+            APP_STATE.vadOverrun = false;
+            APP_STATE.isSpeaking = false;
+            APP_STATE.isStopping = false;
+            APP_STATE.currentSegmentStart = null;
+            APP_STATE.vadQueue = [];
+            APP_STATE.vadRunning = false;
+            APP_STATE.vadQueueHighWaterMark = 0;
+            APP_STATE.processedVadSamples = 0;
+            APP_STATE.vadState = null;
+            APP_STATE.vadContext = new Float32Array(SILERO_VAD_CONTEXT_SAMPLES);
+            APP_STATE.segmentStartIdx = 0;
+            APP_STATE.segmentEndIdx = 0;
+            APP_STATE.inputResampler = new StreamingResampler(actualSampleRate, APP_STATE.sampleRate);
+            APP_STATE._actualSampleRate = actualSampleRate;
+            APP_STATE.recordingStartedAtMs = Date.now();
+        }
+
         async function startRecording() {
-            if (!APP_STATE.vadLoaded || !APP_STATE.spkLoaded) { showToast('请等待模型加载完成', 'warning'); return; }
-            if (APP_STATE.isRecording) return;
+            if (!APP_STATE.vadLoaded || !APP_STATE.asrLoaded || !APP_STATE.spkLoaded) {
+                showToast('请等待人声、文字和音色模型全部加载完成', 'warning');
+                return;
+            }
+            if (APP_STATE.isRecording || APP_STATE.isStopping) return;
 
             try {
                 APP_STATE.mediaStream = await navigator.mediaDevices.getUserMedia({
-                    audio: { channelCount: 1, sampleRate: { ideal: 16000 }, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+                    audio: {
+                        channelCount: 1,
+                        sampleRate: { ideal: 16000 },
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                    },
                 });
 
                 APP_STATE.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
@@ -877,49 +1037,26 @@
 
                 const actualSampleRate = APP_STATE.audioContext.sampleRate;
                 console.log('音频采样率:', actualSampleRate);
-                APP_STATE._actualSampleRate = actualSampleRate;
+                APP_STATE.recordingSessionId++;
+                resetRecordingSession(actualSampleRate);
 
                 const source = APP_STATE.audioContext.createMediaStreamSource(APP_STATE.mediaStream);
-                const bufferSize = 512;
-                APP_STATE.scriptProcessor = APP_STATE.audioContext.createScriptProcessor(bufferSize, 1, 1);
-
+                APP_STATE.scriptProcessor = APP_STATE.audioContext.createScriptProcessor(512, 1, 1);
                 APP_STATE.scriptProcessor.onaudioprocess = (event) => {
-                    if (!APP_STATE.isRecording) return;
-                    const inputData = event.inputBuffer.getChannelData(0);
-                    // 复制数据避免引用被覆盖
-                    processAudioFrame(new Float32Array(inputData), actualSampleRate);
+                    if (!APP_STATE.isRecording || APP_STATE.isStopping) return;
+                    processAudioFrame(
+                        new Float32Array(event.inputBuffer.getChannelData(0)),
+                        actualSampleRate
+                    );
                 };
-
                 source.connect(APP_STATE.scriptProcessor);
                 APP_STATE.scriptProcessor.connect(APP_STATE.audioContext.destination);
-
-                // 初始化缓冲区
-                APP_STATE.audioBuffer = new Float32Array(16000 * 30); // 预分配30秒
-                APP_STATE.audioBufferLen = 0;
-                APP_STATE.vadBuffer = new Float32Array(16000 * 5); // 预分配5秒VAD缓冲
-                APP_STATE.vadBufferLen = 0;
-                APP_STATE.vadBufferPos = 0;
-                APP_STATE.vadSilenceFrames = 0;
-                APP_STATE.isSpeaking = false;
-                APP_STATE.currentSegmentStart = null;
-                APP_STATE.processingQueue = [];
-                APP_STATE.isProcessing = false;
-                APP_STATE.vadQueue = [];
-                APP_STATE.vadRunning = false;
-                APP_STATE.vadH = null;
-                APP_STATE.vadC = null;
-                APP_STATE.segmentStartIdx = 0;
-                APP_STATE.segmentEndIdx = 0;
 
                 APP_STATE.isRecording = true;
                 toggleRecordingButtons(true);
                 updateRecordingStatus('active', '录音中');
                 updateButtonStates();
-                showToast('开始录音 - VAD检测已激活', 'info');
-
-                // 启动 VAD 推理循环（异步，不阻塞音频回调）
-                runVADLoop();
-
+                showToast('开始录音 - Silero VAD 已激活', 'info');
             } catch (error) {
                 console.error('录音启动失败:', error);
                 showToast('无法访问麦克风: ' + error.message, 'warning');
@@ -927,30 +1064,57 @@
             }
         }
 
-        function stopRecording() {
-            if (!APP_STATE.isRecording) return;
-            APP_STATE.isRecording = false;
+        async function stopRecording() {
+            if (!APP_STATE.isRecording || APP_STATE.isStopping) return;
 
-            if (APP_STATE.isSpeaking) {
-                APP_STATE.segmentEndIdx = APP_STATE.audioBufferLen;
-                finalizeSegment();
+            APP_STATE.isStopping = true;
+            updateRecordingStatus('processing', '正在处理最后一句...');
+            const sessionId = APP_STATE.recordingSessionId;
+            disconnectAudioCapture();
+
+            try {
+                flushInputResampler();
+                flushVadBuffer();
+                await drainVADQueue(sessionId);
+
+                if (sessionId !== APP_STATE.recordingSessionId) return;
+                if (APP_STATE.isSpeaking) {
+                    APP_STATE.segmentEndIdx = APP_STATE.processedVadSamples;
+                    finalizeSegment('recording-stopped');
+                }
+            } finally {
+                if (sessionId === APP_STATE.recordingSessionId) {
+                    APP_STATE.isRecording = false;
+                    APP_STATE.isStopping = false;
+                    APP_STATE.recordingSessionId++;
+                    APP_STATE.vadState = null;
+                    APP_STATE.vadContext = null;
+                    updateRecordingStatus('idle', '已停止');
+                    toggleRecordingButtons(false);
+                    updateButtonStates();
+                    vuFillEl.style.width = '0%';
+                    vuFillEl.className = 'vu-fill';
+                    audioLevelTextEl.textContent = '音量: -- dB';
+                    vadStateTextEl.textContent = 'VAD: --';
+                    showToast('录音已停止', 'info');
+                }
             }
+        }
 
-            if (APP_STATE.scriptProcessor) { APP_STATE.scriptProcessor.disconnect(); APP_STATE.scriptProcessor = null; }
-            if (APP_STATE.audioContext) { APP_STATE.audioContext.close().catch(console.warn); APP_STATE.audioContext = null; }
-            if (APP_STATE.mediaStream) { APP_STATE.mediaStream.getTracks().forEach(t => t.stop()); APP_STATE.mediaStream = null; }
-
-            APP_STATE.vadH = null;
-            APP_STATE.vadC = null;
-
-            updateRecordingStatus('idle', '已停止');
-            toggleRecordingButtons(false);
-            updateButtonStates();
-            vuFillEl.style.width = '0%';
-            vuFillEl.className = 'vu-fill';
-            audioLevelTextEl.textContent = '音量: -- dB';
-            vadStateTextEl.textContent = 'VAD: --';
-            showToast('录音已停止', 'info');
+        function disconnectAudioCapture() {
+            if (APP_STATE.scriptProcessor) {
+                APP_STATE.scriptProcessor.disconnect();
+                APP_STATE.scriptProcessor.onaudioprocess = null;
+                APP_STATE.scriptProcessor = null;
+            }
+            if (APP_STATE.mediaStream) {
+                APP_STATE.mediaStream.getTracks().forEach(track => track.stop());
+                APP_STATE.mediaStream = null;
+            }
+            if (APP_STATE.audioContext) {
+                APP_STATE.audioContext.close().catch(console.warn);
+                APP_STATE.audioContext = null;
+            }
         }
 
         function updateRecordingStatus(state, text) {
@@ -960,157 +1124,239 @@
             if (dot) dot.className = 'status-dot ' + (state === 'active' ? 'green' : state === 'speaking' ? 'yellow' : state === 'error' ? 'red' : 'gray');
         }
 
-        // ==================== 音频处理（轻量级，不阻塞） ====================
+        // ==================== 音频处理 ====================
         function processAudioFrame(inputData, actualSampleRate) {
-            let samples16k;
-            if (actualSampleRate === 16000) {
-                samples16k = inputData;
-            } else {
-                samples16k = resampleAudio(inputData, actualSampleRate, 16000);
-            }
+            const resampler = APP_STATE.inputResampler || new StreamingResampler(actualSampleRate, APP_STATE.sampleRate);
+            APP_STATE.inputResampler = resampler;
+            const samples16k = resampler.process(inputData);
+            appendResampledAudio(samples16k);
+        }
 
-            // 计算音量 (RMS)
+        function appendResampledAudio(samples16k) {
+            if (!samples16k.length) return;
+
             let sumSq = 0;
-            for (let i = 0; i < samples16k.length; i++) { sumSq += samples16k[i] * samples16k[i]; }
+            for (let i = 0; i < samples16k.length; i++) sumSq += samples16k[i] * samples16k[i];
             const rms = Math.sqrt(sumSq / samples16k.length);
             const db = rms > 0 ? 20 * Math.log10(rms) : -Infinity;
-
             const vuLevel = Math.min(100, Math.max(0, (db + 60) * 2.5));
             vuFillEl.style.width = vuLevel + '%';
             vuFillEl.className = 'vu-fill' + (vuLevel > 75 ? ' peak' : vuLevel > 50 ? ' high' : '');
             audioLevelTextEl.textContent = '音量: ' + (db === -Infinity ? '-∞' : db.toFixed(1)) + ' dB';
 
-            // 始终积累到 VAD 缓冲
-            pushToVadBuf(samples16k);
-
-            // 始终积累到语音段缓冲（用于后续截取）
             pushToAudioBuf(samples16k);
+            APP_STATE.totalAudioSamples += samples16k.length;
+            pushToVadBuf(samples16k);
+            enqueueVadFrames();
+            trimAudioBufferAtSafeBoundary();
+        }
 
-            // 从 VAD 缓冲中提取帧放入推理队列
+        function flushInputResampler() {
+            if (!APP_STATE.inputResampler) return;
+            appendResampledAudio(APP_STATE.inputResampler.flush());
+        }
+
+        function enqueueVadFrames() {
             while (APP_STATE.vadBufferLen >= APP_STATE.vadFrameSize) {
-                const frame = drainVadBuf(APP_STATE.vadFrameSize);
-                APP_STATE.vadQueue.push(frame);
+                if (APP_STATE.vadQueue.length >= APP_STATE.vadMaxQueueFrames) {
+                    APP_STATE.vadOverrun = true;
+                    console.error('VAD 队列已满，停止录音以避免静默丢音');
+                    showToast('设备处理不过来，正在安全停止录音', 'warning');
+                    void stopRecording();
+                    return;
+                }
+                APP_STATE.vadQueue.push(drainVadBuf(APP_STATE.vadFrameSize));
             }
+            APP_STATE.vadQueueHighWaterMark = Math.max(
+                APP_STATE.vadQueueHighWaterMark,
+                APP_STATE.vadQueue.length
+            );
+            void runVADLoop(APP_STATE.recordingSessionId);
+        }
+
+        function flushVadBuffer() {
+            while (APP_STATE.vadBufferLen >= APP_STATE.vadFrameSize) {
+                APP_STATE.vadQueue.push(drainVadBuf(APP_STATE.vadFrameSize));
+            }
+            if (APP_STATE.vadBufferLen) {
+                const tail = drainVadBuf(APP_STATE.vadBufferLen);
+                const padded = new Float32Array(APP_STATE.vadFrameSize);
+                padded.set(tail);
+                APP_STATE.vadQueue.push(padded);
+            }
+            APP_STATE.vadQueueHighWaterMark = Math.max(
+                APP_STATE.vadQueueHighWaterMark,
+                APP_STATE.vadQueue.length
+            );
         }
 
         // ==================== VAD 异步推理循环 ====================
-        async function runVADLoop() {
-            if (!APP_STATE.isRecording) return;
+        async function runVADLoop(sessionId) {
+            if (APP_STATE.vadRunning || APP_STATE.vadQueue.length === 0) return;
+            if (sessionId !== APP_STATE.recordingSessionId) return;
 
-            // 处理队列中的帧（不限制数量，尽可能处理）
-            while (APP_STATE.vadQueue.length > 0) {
-                if (APP_STATE.vadRunning) break; // 防止并发
-                APP_STATE.vadRunning = true;
-                const frame = APP_STATE.vadQueue.shift();
-                const speechProb = await runVADAsync(frame);
-                handleVADResult(speechProb, frame);
-                APP_STATE.vadRunning = false;
-                // 每 5 帧后 yield，避免阻塞
-                if (APP_STATE.vadQueue.length > 0 && APP_STATE.vadQueue.length % 5 === 0) {
-                    await yieldToMain();
+            APP_STATE.vadRunning = true;
+            try {
+                while (APP_STATE.vadQueue.length > 0 && sessionId === APP_STATE.recordingSessionId) {
+                    const frame = APP_STATE.vadQueue.shift();
+                    const frameSize = frame.length;
+                    const speechProb = await runVADAsync(frame, sessionId);
+                    if (sessionId !== APP_STATE.recordingSessionId) return;
+                    handleVADResult(speechProb, frameSize);
+                    if (APP_STATE.vadQueue.length > 0 && APP_STATE.vadQueue.length % 5 === 0) {
+                        await yieldToMain();
+                    }
+                }
+            } finally {
+                if (sessionId === APP_STATE.recordingSessionId) {
+                    APP_STATE.vadRunning = false;
                 }
             }
 
-            // 使用 setTimeout 而不是 requestAnimationFrame，更容易被调度
-            setTimeout(() => runVADLoop(), 50);
+            if (sessionId === APP_STATE.recordingSessionId && APP_STATE.vadQueue.length > 0) {
+                void runVADLoop(sessionId);
+            }
         }
 
-        async function runVADAsync(audioFrame) {
+        async function drainVADQueue(sessionId) {
+            while (
+                sessionId === APP_STATE.recordingSessionId &&
+                (APP_STATE.vadQueue.length > 0 || APP_STATE.vadRunning)
+            ) {
+                await runVADLoop(sessionId);
+                if (APP_STATE.vadRunning) await new Promise(resolve => setTimeout(resolve, 10));
+            }
+        }
+
+        async function runVADAsync(audioFrame, sessionId) {
             if (!APP_STATE.vadLoaded || !APP_STATE.vadModel) return 0;
+            if (sessionId !== APP_STATE.recordingSessionId) return 0;
+            if (audioFrame.length !== APP_STATE.vadFrameSize) {
+                throw new Error('Silero VAD 帧长错误: ' + audioFrame.length);
+            }
 
             try {
                 const ortInstance = getOrt();
+                const context = APP_STATE.vadContext || new Float32Array(SILERO_VAD_CONTEXT_SAMPLES);
+                const inputData = new Float32Array(SILERO_VAD_INPUT_SAMPLES);
+                inputData.set(context);
+                inputData.set(audioFrame, SILERO_VAD_CONTEXT_SAMPLES);
+                const stateData = APP_STATE.vadState || new Float32Array(SILERO_VAD_STATE_SIZE);
+                const nextContext = audioFrame.slice(
+                    audioFrame.length - SILERO_VAD_CONTEXT_SAMPLES
+                );
 
-                // 初始化状态张量
-                if (!APP_STATE.vadH || !APP_STATE.vadC) {
-                    const hData = new Float32Array(128).fill(0); // [2, 1, 64] = 128
-                    const cData = new Float32Array(128).fill(0);
-                    APP_STATE.vadH = new ortInstance.Tensor('float32', hData, [2, 1, 64]);
-                    APP_STATE.vadC = new ortInstance.Tensor('float32', cData, [2, 1, 64]);
-                }
-
-                const inputTensor = new ortInstance.Tensor('float32', audioFrame, [1, audioFrame.length]);
-                const srTensor = new ortInstance.Tensor('int64', new BigInt64Array([BigInt(16000)]), [1]);
-
-                const inputNames = APP_STATE.vadModel.inputNames;
-                const feeds = {};
-                feeds[inputNames[0]] = inputTensor;
-                feeds[inputNames[1]] = srTensor;
-                feeds[inputNames[2]] = APP_STATE.vadH;
-                feeds[inputNames[3]] = APP_STATE.vadC;
-
+                const feeds = {
+                    input: new ortInstance.Tensor('float32', inputData, [1, SILERO_VAD_INPUT_SAMPLES]),
+                    state: new ortInstance.Tensor('float32', stateData, [2, 1, 128]),
+                    sr: new ortInstance.Tensor('int64', new BigInt64Array([16000n]), []),
+                };
                 const results = await APP_STATE.vadModel.run(feeds);
-                const outputName = APP_STATE.vadModel.outputNames[0];
-                const outputData = results[outputName].data;
+                if (sessionId !== APP_STATE.recordingSessionId) return 0;
 
-                const outNames = APP_STATE.vadModel.outputNames;
-                if (outNames.length >= 3) {
-                    APP_STATE.vadH = results[outNames[1]];
-                    APP_STATE.vadC = results[outNames[2]];
+                const probability = Number(results.output.data[0]);
+                const nextState = results.stateN.data;
+                if (nextState.length !== SILERO_VAD_STATE_SIZE) {
+                    throw new Error('Silero VAD 状态长度错误: ' + nextState.length);
                 }
-
-                return outputData[0] || 0;
+                APP_STATE.vadState = new Float32Array(nextState);
+                APP_STATE.vadContext = nextContext;
+                return Number.isFinite(probability) ? Math.min(1, Math.max(0, probability)) : 0;
             } catch (error) {
                 console.error('VAD推理错误:', error);
-                return 0;
+                throw error;
             }
         }
 
-        function handleVADResult(speechProb, audioFrame) {
-            const isSpeech = speechProb > APP_STATE.vadThreshold;
+        function handleVADResult(speechProb, frameSize) {
+            const frameStartIdx = APP_STATE.processedVadSamples;
+            const frameEndIdx = frameStartIdx + frameSize;
+            APP_STATE.processedVadSamples = frameEndIdx;
+            const isStartSpeech = speechProb >= APP_STATE.vadStartThreshold;
+            const isContinueSpeech = speechProb >= APP_STATE.vadContinueThreshold;
+            vadStateTextEl.textContent = 'VAD: ' + (isContinueSpeech ? '语音 ' : '静音 ') + speechProb.toFixed(2);
 
-            vadStateTextEl.textContent = 'VAD: ' + (isSpeech ? '语音 ' : '静音 ') + speechProb.toFixed(2);
-
-            if (isSpeech) {
-                APP_STATE.vadSilenceFrames = 0;
-                if (!APP_STATE.isSpeaking) {
-                    APP_STATE.isSpeaking = true;
-                    APP_STATE.segmentStartIdx = APP_STATE.audioBufferLen - audioFrame.length;
-                    if (APP_STATE.segmentStartIdx < 0) APP_STATE.segmentStartIdx = 0;
-                    APP_STATE.currentSegmentStart = new Date();
-                    updateRecordingStatus('speaking', '检测到语音');
-                    console.log('语音段开始, startIdx:', APP_STATE.segmentStartIdx);
+            if (!APP_STATE.isSpeaking) {
+                if (isStartSpeech) {
+                    if (!APP_STATE.vadSpeechFrames) APP_STATE.vadCandidateStartIdx = frameStartIdx;
+                    APP_STATE.vadSpeechFrames++;
+                    if (APP_STATE.vadSpeechFrames >= APP_STATE.vadStartSpeechFrames) {
+                        APP_STATE.isSpeaking = true;
+                        APP_STATE.vadSpeechFrames = 0;
+                        APP_STATE.vadSilenceFrames = 0;
+                        APP_STATE.segmentStartIdx = Math.max(0, APP_STATE.vadCandidateStartIdx - APP_STATE.vadPreRollSamples);
+                        APP_STATE.segmentEndIdx = frameEndIdx;
+                        APP_STATE.vadLastSpeechEndIdx = frameEndIdx;
+                        APP_STATE.currentSegmentStart = new Date(
+                            APP_STATE.recordingStartedAtMs +
+                            APP_STATE.segmentStartIdx / APP_STATE.sampleRate * 1000
+                        );
+                        updateRecordingStatus('speaking', '检测到语音');
+                        console.log('语音段开始, startIdx:', APP_STATE.segmentStartIdx);
+                    }
+                } else {
+                    APP_STATE.vadSpeechFrames = 0;
                 }
-                APP_STATE.segmentEndIdx = APP_STATE.audioBufferLen;
-            } else if (APP_STATE.isSpeaking) {
-                APP_STATE.vadSilenceFrames++;
-                APP_STATE.segmentEndIdx = APP_STATE.audioBufferLen;
-                if (APP_STATE.vadSilenceFrames >= APP_STATE.vadSilenceThreshold) {
-                    finalizeSegment();
-                }
-            }
-        }
-
-        function finalizeSegment() {
-            const segLen = APP_STATE.segmentEndIdx - APP_STATE.segmentStartIdx;
-            if (segLen < APP_STATE.vadFrameSize * 2) {
-                APP_STATE.isSpeaking = false;
-                APP_STATE.vadSilenceFrames = 0;
-                updateRecordingStatus('active', '录音中');
                 return;
             }
 
-            // 复制语音段数据（独立副本，不依赖原缓冲区）
-            const segmentAudio = new Float32Array(segLen);
-            for (let i = 0; i < segLen; i++) {
-                segmentAudio[i] = APP_STATE.audioBuffer[APP_STATE.segmentStartIdx + i];
+            if (isContinueSpeech) {
+                APP_STATE.vadSilenceFrames = 0;
+                APP_STATE.vadLastSpeechEndIdx = frameEndIdx;
+            } else {
+                APP_STATE.vadSilenceFrames++;
             }
+            APP_STATE.segmentEndIdx = frameEndIdx;
+
+            if (frameEndIdx - APP_STATE.segmentStartIdx >= APP_STATE.vadMaxSegmentSamples) {
+                finalizeSegment('max-duration');
+            } else if (APP_STATE.vadSilenceFrames >= APP_STATE.vadSilenceThreshold) {
+                APP_STATE.segmentEndIdx = Math.min(
+                    frameEndIdx,
+                    APP_STATE.vadLastSpeechEndIdx + APP_STATE.vadPostRollSamples
+                );
+                finalizeSegment('silence');
+            }
+        }
+
+        function finalizeSegment(reason) {
+            const availableEnd = Math.min(
+                APP_STATE.segmentEndIdx,
+                APP_STATE.audioBufferBaseIdx + APP_STATE.audioBufferLen
+            );
+            const segmentStart = Math.max(
+                APP_STATE.segmentStartIdx,
+                APP_STATE.audioBufferBaseIdx
+            );
+            const segLen = availableEnd - segmentStart;
+            if (segLen < APP_STATE.vadFrameSize * 2) {
+                APP_STATE.isSpeaking = false;
+                APP_STATE.vadSilenceFrames = 0;
+                APP_STATE.vadSpeechFrames = 0;
+                updateRecordingStatus(APP_STATE.isStopping ? 'processing' : 'active', APP_STATE.isStopping ? '正在处理最后一句...' : '录音中');
+                return;
+            }
+
+            const segmentAudio = APP_STATE.audioBuffer.slice(
+                segmentStart - APP_STATE.audioBufferBaseIdx,
+                availableEnd - APP_STATE.audioBufferBaseIdx
+            );
             const duration = segmentAudio.length / APP_STATE.sampleRate;
             const startTime = APP_STATE.currentSegmentStart || new Date();
-
-            console.log('语音段结束，时长:', duration.toFixed(2), '秒，startIdx:', APP_STATE.segmentStartIdx);
+            console.log('语音段结束，原因:', reason, '时长:', duration.toFixed(2), '秒，startIdx:', segmentStart);
 
             APP_STATE.processingQueue.push({
                 audio: segmentAudio,
-                startTime: startTime,
-                duration: duration,
+                startTime,
+                duration,
                 sampleRate: APP_STATE.sampleRate,
             });
 
             APP_STATE.isSpeaking = false;
             APP_STATE.vadSilenceFrames = 0;
-            updateRecordingStatus('active', '录音中');
-
+            APP_STATE.vadSpeechFrames = 0;
+            trimAudioBufferAtSafeBoundary();
+            updateRecordingStatus(APP_STATE.isStopping ? 'processing' : 'active', APP_STATE.isStopping ? '正在处理最后一句...' : '录音中');
             processQueue();
         }
 
@@ -1160,8 +1406,17 @@
                 // 匹配已有说话人，更新质心（指数移动平均）
                 const spk = APP_STATE.speakers.find(s => s.id === bestId);
                 const alpha = 0.3;
+                let norm = 0;
                 for (let i = 0; i < spk.centroid.length; i++) {
-                    spk.centroid[i] = spk.centroid[i] * (1 - alpha) + embedding[i] * alpha;
+                    const value = spk.centroid[i] * (1 - alpha) + embedding[i] * alpha;
+                    spk.centroid[i] = value;
+                    norm += value * value;
+                }
+                norm = Math.sqrt(norm);
+                if (norm > 0) {
+                    for (let i = 0; i < spk.centroid.length; i++) {
+                        spk.centroid[i] /= norm;
+                    }
                 }
                 spk.count++;
                 return spk;
@@ -1627,24 +1882,31 @@
             showToast('会议记录已清空', 'info');
         }
 
-        function exportTranscript() {
-            if (APP_STATE.segments.length === 0) { showToast('没有可导出的会议记录', 'warning'); return; }
+        function buildTranscriptMarkdown() {
             let markdown = '# 会议纪要\n\n';
             markdown += '> 生成时间: ' + new Date().toLocaleString() + '\n';
             markdown += '> 语音段总数: ' + APP_STATE.segments.length + '\n\n---\n\n';
             for (const entry of APP_STATE.segments) {
                 markdown += `**${entry.speaker}**  \`${entry.time}\` (${entry.duration.toFixed(1)}s)\n\n${entry.text}\n\n---\n\n`;
             }
+            return markdown;
+        }
+
+        function exportTranscript() {
+            if (APP_STATE.segments.length === 0) { showToast('没有可导出的会议记录', 'warning'); return null; }
+            const markdown = buildTranscriptMarkdown();
+            const filename = '会议纪要_' + formatDate(new Date()) + '.md';
             const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = '会议纪要_' + formatDate(new Date()) + '.md';
+            a.download = filename;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
             showToast('会议纪要已导出！', 'success');
+            return { filename, markdown };
         }
 
         function copyTranscript() {
@@ -1662,8 +1924,154 @@
                 const id = el.id || 'e' + i;
                 elements.push({ id: el.id || 'btn-' + i, tag: el.tagName.toLowerCase(), text: (el.textContent || '').trim().substring(0, 30), disabled: el.disabled || false, visible: el.offsetParent !== null, className: el.className });
             });
-            return { url: window.location.href, title: document.title, isRecording: APP_STATE.isRecording, vadLoaded: APP_STATE.vadLoaded, asrLoaded: APP_STATE.asrLoaded, segments: APP_STATE.segments.length, elements };
+            return { url: window.location.href, title: document.title, e2eMode: E2E_MODE, isRecording: APP_STATE.isRecording, vadLoaded: APP_STATE.vadLoaded, asrLoaded: APP_STATE.asrLoaded, spkLoaded: APP_STATE.spkLoaded, segments: APP_STATE.segments.length, elements };
         };
+
+        window.bridgeSeedTranscriptForE2E = function(entries) {
+            if (!E2E_MODE) return { success: false, error: 'E2E mode is disabled' };
+            if (!Array.isArray(entries) || entries.length === 0) return { success: false, error: 'Expected transcript entries' };
+            clearTranscript();
+            for (const entry of entries) {
+                const duration = Number(entry.duration);
+                if (!Number.isFinite(duration) || duration <= 0 || typeof entry.text !== 'string' || !entry.text.trim()) {
+                    return { success: false, error: 'Invalid transcript entry' };
+                }
+                addTranscriptEntry(entry.startTime || new Date(), duration, entry.text.trim(), entry.speaker || null);
+            }
+            return { success: true, segments: APP_STATE.segments.length };
+        };
+
+        window.bridgeExportTranscriptForE2E = function() {
+            if (!E2E_MODE) return { success: false, error: 'E2E mode is disabled' };
+            const result = exportTranscript();
+            return result ? { success: true, ...result } : { success: false, error: 'No transcript to export' };
+        };
+
+        window.bridgeResamplerLengthForE2E = function(fromRate, inputSamples, chunkSize) {
+            if (!E2E_MODE) return { success: false, error: 'E2E mode is disabled' };
+            const rate = Number(fromRate);
+            const total = Number(inputSamples);
+            const size = Number(chunkSize) || 512;
+            if (!Number.isFinite(rate) || !Number.isFinite(total) || rate <= 0 || total < 0 || size <= 0) {
+                return { success: false, error: 'Invalid resampler arguments' };
+            }
+            const resampler = new StreamingResampler(rate, 16000);
+            let produced = 0;
+            for (let offset = 0; offset < total; offset += size) {
+                produced += resampler.process(new Float32Array(Math.min(size, total - offset))).length;
+            }
+            produced += resampler.flush().length;
+            return { success: true, produced, expected: Math.round(total * 16000 / rate) };
+        };
+
+        async function replayWavForE2E(url) {
+            if (!APP_STATE.vadLoaded || !APP_STATE.asrLoaded || !APP_STATE.spkLoaded) {
+                throw new Error('模型尚未全部加载完成');
+            }
+            const response = await fetch(url);
+            if (!response.ok) throw new Error('测试音频加载失败: ' + response.status);
+            const bytes = await response.arrayBuffer();
+            const view = new DataView(bytes);
+            const ascii = (offset) => String.fromCharCode(...new Uint8Array(bytes, offset, 4));
+            if (view.byteLength < 44 || ascii(0) !== 'RIFF' || ascii(8) !== 'WAVE') throw new Error('测试音频不是 WAV');
+
+            let offset = 12;
+            let sampleRate = 0, channels = 0, bitsPerSample = 0, dataOffset = 0, dataLength = 0;
+            while (offset + 8 <= view.byteLength) {
+                const id = ascii(offset);
+                const length = view.getUint32(offset + 4, true);
+                const chunkStart = offset + 8;
+                if (id === 'fmt ') {
+                    if (view.getUint16(chunkStart, true) !== 1) throw new Error('测试音频必须为 PCM WAV');
+                    channels = view.getUint16(chunkStart + 2, true);
+                    sampleRate = view.getUint32(chunkStart + 4, true);
+                    bitsPerSample = view.getUint16(chunkStart + 14, true);
+                } else if (id === 'data') {
+                    dataOffset = chunkStart;
+                    dataLength = length;
+                    break;
+                }
+                offset = chunkStart + length + (length % 2);
+            }
+            if (sampleRate !== 16000 || channels !== 1 || bitsPerSample !== 16 || !dataLength) {
+                throw new Error('测试音频必须为 16kHz、单声道、16-bit PCM WAV');
+            }
+
+            APP_STATE.recordingSessionId++;
+            resetRecordingSession(16000);
+            const sessionId = APP_STATE.recordingSessionId;
+            APP_STATE.isRecording = true;
+            const samples = new Float32Array(dataLength / 2);
+            for (let i = 0; i < samples.length; i++) {
+                samples[i] = view.getInt16(dataOffset + i * 2, true) / 32768;
+            }
+            for (let i = 0; i < samples.length; i += 512) {
+                processAudioFrame(samples.slice(i, i + 512), 16000);
+                await drainVADQueue(sessionId);
+            }
+            flushInputResampler();
+            flushVadBuffer();
+            await drainVADQueue(sessionId);
+            if (sessionId !== APP_STATE.recordingSessionId) {
+                throw new Error('测试音频会话已失效');
+            }
+            if (APP_STATE.isSpeaking) {
+                APP_STATE.segmentEndIdx = APP_STATE.processedVadSamples;
+                finalizeSegment('fixture-ended');
+            }
+            APP_STATE.isRecording = false;
+            APP_STATE.recordingSessionId++;
+            APP_STATE.vadState = null;
+            APP_STATE.vadContext = null;
+
+            const deadline = performance.now() + 60000;
+            while (APP_STATE.isProcessing || APP_STATE.processingQueue.length) {
+                if (performance.now() >= deadline) throw new Error('测试音频转写超时');
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+            return APP_STATE.segments.length;
+        }
+
+        function addE2EFixtureControl() {
+            if (!E2E_MODE) return;
+            const button = document.createElement('button');
+            button.id = 'e2eSeedTranscript';
+            button.type = 'button';
+            button.className = 'btn btn-ghost btn-sm';
+            button.textContent = '写入测试记录';
+            button.style.marginLeft = '8px';
+            button.addEventListener('click', () => {
+                const result = window.bridgeSeedTranscriptForE2E([
+                    { startTime: new Date('2026-07-30T02:00:00Z'), duration: 1.2, text: '这是端到端导出测试记录。' },
+                    { startTime: new Date('2026-07-30T02:00:02Z'), duration: 1.8, text: '模型加载完成后可导出 Markdown 文件。' },
+                ]);
+                if (result.success) showToast('已写入 E2E 测试记录', 'success');
+                else showToast('写入测试记录失败: ' + result.error, 'warning');
+            });
+            const replayButton = document.createElement('button');
+            replayButton.id = 'e2eReplayFixture';
+            replayButton.type = 'button';
+            replayButton.className = 'btn btn-ghost btn-sm';
+            replayButton.textContent = '回放真实音频';
+            replayButton.style.marginLeft = '4px';
+            replayButton.addEventListener('click', async () => {
+                replayButton.disabled = true;
+                showToast('正在回放真实音频...', 'info');
+                try {
+                    const count = await replayWavForE2E('./e2e/fixtures/fixture-zh.wav');
+                    showToast(count ? '真实音频转写完成' : '未检测到语音段', count ? 'success' : 'warning');
+                } catch (error) {
+                    console.error('真实音频回放失败:', error);
+                    showToast('真实音频回放失败: ' + error.message, 'warning');
+                } finally {
+                    replayButton.disabled = false;
+                }
+            });
+            const controls = document.querySelector('#transcriptCard .card-header > div');
+            controls.appendChild(button);
+            controls.appendChild(replayButton);
+        }
+
         window.bridgeClick = function(ref, duration) {
             duration = duration || 1500;
             let el = document.getElementById(ref);
@@ -1698,6 +2106,7 @@
         window.setASRModelUrl = setASRModelUrl;
         window.setTokenMapUrl = setTokenMapUrl;
         window.APP_STATE = APP_STATE;
+        addE2EFixtureControl();
         init();
     </script>
 </body>

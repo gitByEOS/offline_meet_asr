@@ -1,6 +1,11 @@
 # 模型文件（较大，不提交）
 models/
 
+# 本地 ONNX Runtime 运行时作为发布资产提交
+!vendor/
+!vendor/onnxruntime-web/
+!vendor/onnxruntime-web/*
+
 # Python 缓存
 __pycache__/
 *.pyc
@@ -9,7 +14,18 @@ __pycache__/
 .DS_Store
 
 # 测试报告
-e2e/
+e2e/*
+!e2e/README.md
+!e2e/actions-export.json
+!e2e/vad-regression-actions.json
+!e2e/fixtures/
+!e2e/fixtures/fixture-zh.wav
+
+# 临时浏览器测试动作
+/e2e-model-load-actions.json
+
+# 本会话安全删除暂存目录
+.trash/
 
 # 其他
 .claude/
